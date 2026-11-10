@@ -38,7 +38,7 @@ web-build: wasm
 dev: wasm
     cd web && bun run dev
 
-# Run the CLI, e.g. `just run 6 160`
+# Run the CLI, e.g. `just run demo --seed 7`
 run *args:
     cargo run -p airport-sim -- {{args}}
 

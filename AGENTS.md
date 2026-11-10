@@ -14,6 +14,16 @@ wrappers around `host` for bulk seeded runs and for the browser. `just wasm` com
 `wasm` crate and writes JS bindings to `web/src/wasm/` (generated, not committed), which
 `web/src/sim.ts` loads.
 
+## The airport crate
+
+`Airport::apply(&Command) -> Vec<Output>` is the whole interface; time only moves through
+`Command::AdvanceTime`. Every aviation number lives in `data.rs`, not in the logic. Tests in
+`crates/airport/tests/rules.rs` show their hand-worked arithmetic; `tests/invariants.rs` feeds
+random commands to random airports and checks the rules of design section 8
+(`AIRPORT_SEEDS=0..5000 cargo test --release -p airport --test invariants` for more seeds).
+`web/src/sim.test.ts` runs the same scenario natively and as WebAssembly and requires identical
+output, so anything added to `Airport` must derive `Hash` to stay in the fingerprint.
+
 ## Determinism rules
 
 Simulation code must be deterministic. `clippy.toml` and `[workspace.lints]` in `Cargo.toml`
@@ -32,7 +42,7 @@ ban list in `clippy.toml` instead. Rust is pinned in `rust-toolchain.toml`.
 | `just ci` | Everything CI runs: `check`, `test`, `web-build` |
 | `just dev` | Rebuild wasm, then serve the web app at http://localhost:3000 |
 | `just wasm` | Rebuild only the wasm bindings (rerun after Rust changes) |
-| `just run [NM KT]` | Run the CLI |
+| `just run ARGS` | Run the CLI, e.g. `just run demo --seed 7` (`just run` alone prints usage) |
 | `just fmt` / `just clean` | Format Rust / remove build outputs |
 
 Bump `wasm-bindgen` in three places together: `Cargo.toml`, `justfile`, `.github/workflows/ci.yml`.

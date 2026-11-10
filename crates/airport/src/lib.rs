@@ -1,41 +1,31 @@
 //! The airport state machine (Phase 1).
 //!
 //! Pure logic: no clock, network, disk, threads or floats. It knows nothing
-//! about replicas, the host or browsers.
+//! about replicas, the host or browsers. An [`Airport`] is given one
+//! [`Command`] at a time and answers with [`Output`]s; the same commands
+//! always produce the same state and the same [`Airport::fingerprint`].
 
-/// Milliseconds in one hour.
-const MS_PER_HOUR: u64 = 3_600_000;
+pub mod command;
+pub mod config;
+pub mod data;
+pub mod fingerprint;
+pub mod policy;
+pub mod rng;
+pub mod scenario;
+pub mod separation;
+pub mod state;
+pub mod traffic;
+pub mod wind;
 
-/// Time in whole milliseconds for an aircraft at `speed_kt` knots to cover
-/// `distance_nm` nautical miles, rounded to the nearest millisecond.
-///
-/// Returns `None` for a speed of zero.
-#[must_use]
-pub fn gap_ms(distance_nm: u32, speed_kt: u32) -> Option<u64> {
-    let speed = u64::from(speed_kt);
-    if speed == 0 {
-        return None;
-    }
-    let numerator = u64::from(distance_nm) * MS_PER_HOUR;
-    Some((numerator + speed / 2) / speed)
-}
+/// Simulated time in whole milliseconds since the start of the run.
+pub type Ms = u64;
 
-#[cfg(test)]
-mod tests {
-    use super::gap_ms;
+pub const MS_PER_MINUTE: Ms = 60_000;
+pub const MS_PER_HOUR: Ms = 3_600_000;
+pub const MS_PER_DAY: Ms = 24 * MS_PER_HOUR;
 
-    #[test]
-    fn five_miles_at_140_knots_is_about_129_seconds() {
-        assert_eq!(gap_ms(5, 140), Some(128_571));
-    }
-
-    #[test]
-    fn zero_speed_has_no_gap() {
-        assert_eq!(gap_ms(5, 0), None);
-    }
-
-    #[test]
-    fn zero_distance_is_zero() {
-        assert_eq!(gap_ms(0, 140), Some(0));
-    }
-}
+pub use command::{Command, Emergency, Output, Reason, RejectReason};
+pub use config::{AirportConfig, ConfigError, RunwayConfig};
+pub use separation::gap_ms;
+pub use state::{Airport, Snapshot};
+pub use wind::Wind;

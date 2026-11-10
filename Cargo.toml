@@ -15,6 +15,8 @@ raft = { path = "crates/raft" }
 host = { path = "crates/host" }
 # Pinned exactly: the wasm-bindgen CLI (see justfile and CI) must match this version.
 wasm-bindgen = "=0.2.130"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Determinism rules from design/design-proposal.md section 4.
 # Banned paths live in clippy.toml.
