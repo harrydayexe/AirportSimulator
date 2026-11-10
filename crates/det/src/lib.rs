@@ -5,7 +5,9 @@
 //! any crate can depend on it.
 
 pub mod fingerprint;
+pub mod ids;
 pub mod rng;
 
 pub use fingerprint::{Fnv1a, fingerprint};
+pub use ids::{ClientId, Index, NodeId, Term};
 pub use rng::Rng;
