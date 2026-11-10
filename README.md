@@ -1,7 +1,7 @@
 # Airport Simulator
 
 A deterministic, replicated airport simulator in Rust, running on a simulated network
-inside the browser. See [`docs/design-proposal.md`](docs/design-proposal.md) for the plan
+inside the browser. See [`design/design-proposal.md`](design/design-proposal.md) for the plan
 and [`AGENTS.md`](AGENTS.md) for layout and commands.
 
 ```sh
