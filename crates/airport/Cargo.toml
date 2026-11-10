@@ -1,0 +1,10 @@
+[package]
+name = "airport"
+description = "The airport state machine: pure, deterministic logic with no I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
