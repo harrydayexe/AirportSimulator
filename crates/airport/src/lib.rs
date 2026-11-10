@@ -8,14 +8,17 @@
 pub mod command;
 pub mod config;
 pub mod data;
-pub mod fingerprint;
 pub mod policy;
-pub mod rng;
 pub mod scenario;
 pub mod separation;
 pub mod state;
 pub mod traffic;
 pub mod wind;
+
+// The seeded generator and the fingerprint live in `det` so that `raft` can use
+// them without depending on airports. Re-exported so `airport::rng` and
+// `airport::fingerprint` still work.
+pub use det::{fingerprint, rng};
 
 /// Simulated time in whole milliseconds since the start of the run.
 pub type Ms = u64;

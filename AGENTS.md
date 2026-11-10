@@ -7,7 +7,9 @@ React web app. The full plan is in `design/design-proposal.md`.
 ## Structure
 
 A Cargo workspace (`crates/`) plus a Bun/React app (`web/`). Each crate depends only on
-those listed before it: `airport` is the pure state machine and knows nothing of replicas,
+those listed before it: `det` holds the deterministic tools everything shares (the seeded
+`Rng`, the fingerprint, and identifier types such as `NodeId`, `Term` and `Index`); `airport`
+is the pure state machine and knows nothing of replicas,
 networks or browsers; `raft` is the hand-written agreement logic; `host` runs every replica
 with a fake network, disk and clock; `cli` (binary `airport-sim`) and `wasm` are thin
 wrappers around `host` for bulk seeded runs and for the browser. `just wasm` compiles the
