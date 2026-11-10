@@ -1,23 +1,3 @@
----
-type: project
-date: 2026-11-09
-description: Design proposal for a new Rust project, Airport Simulator, a replicated and deterministic airport simulator that runs entirely on a simulated network, with a React web app.
-parents:
-  - "[[_Airport Simulator]]"
-related:
-  - "[[Airport Simulator like TigerBeetle]]"
-  - "[[airport-simulator-and-containers]]"
-sources:
-  - https://github.com/harrydayexe/AirportCapacityCalculator
-  - https://tigerbeetle.com/blog/2023-07-11-we-put-a-distributed-database-in-the-browser/
-  - https://raft.github.io/
-  - https://github.com/tikv/raft-rs
-  - https://pdos.csail.mit.edu/6.824/
-tags:
-  - design
-ai_generated: true
----
-
 # Airport Simulator: Design Proposal
 
 > [!summary] The proposal in five sentences
