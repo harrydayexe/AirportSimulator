@@ -11,3 +11,5 @@ just ci      # check + test + build
 ```
 
 Requires Rust (via rustup), [Bun](https://bun.sh) and [just](https://just.systems).
+
+Licensed under the [MIT License](LICENSE).

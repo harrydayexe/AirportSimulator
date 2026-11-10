@@ -36,3 +36,11 @@ ban list in `clippy.toml` instead. Rust is pinned in `rust-toolchain.toml`.
 | `just fmt` / `just clean` | Format Rust / remove build outputs |
 
 Bump `wasm-bindgen` in three places together: `Cargo.toml`, `justfile`, `.github/workflows/ci.yml`.
+
+## Commits
+
+Always write commit messages in [Conventional Commits](https://www.conventionalcommits.org/)
+style (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `ci:`, `chore:`, optional scope such as
+`feat(raft):`). Versions are derived from them, so semver depends on getting the type right:
+`fix` is a patch, `feat` is a minor, and a `!` after the type (or a `BREAKING CHANGE:` footer)
+is a major.
