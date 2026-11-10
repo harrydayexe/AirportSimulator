@@ -2,7 +2,7 @@
 
 Airport Simulator is a deterministic, replicated airport simulator. Everything runs in one
 Rust program (the "host") on a simulated network, compiled to WebAssembly and driven by a
-React web app. The full plan is in `docs/design-proposal.md`.
+React web app. The full plan is in `design/design-proposal.md`.
 
 ## Structure
 

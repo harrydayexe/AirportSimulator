@@ -1,4 +1,4 @@
-# Determinism ban (docs/design-proposal.md section 4). Enforced by `just check`.
+# Determinism ban (design/design-proposal.md section 4). Enforced by `just check`.
 disallowed-methods = [
   { path = "std::time::Instant::now", reason = "real clock: simulated time arrives as a command" },
   { path = "std::time::SystemTime::now", reason = "real clock: simulated time arrives as a command" },

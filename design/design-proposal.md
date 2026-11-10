@@ -39,7 +39,7 @@ The fixed decisions this plan is built on:
 - **One repository with separate components inside it** (a "monorepo"), built with `just`, a small command runner that reads a `justfile`, rather than with Makefiles.
 - **The agreement logic is written by hand**, not taken from a library. This is the logic that keeps the three copies of an airport identical.
 - **The aviation is shallow but accurate.** Only a few aspects of real operations are modelled, but those few use real rules and real numbers. Phase 1 in section 6 lists them.
-- **No containers and no Kubernetes.** Every copy of every airport runs inside a single program, and the network between them is simulated. Section 3 explains why. Section 12 describes what it would take to move to real machines later.
+- **No containers and no Kubernetes.** Every copy of every airport runs inside a single program, and the network between them is simulated. Section 3 explains why.
 
 The detailed repository setup will be worked out in Claude Code. Section 9 gives only a sketch.
 
@@ -51,7 +51,7 @@ Three things about it matter for this proposal:
 
 - **There are no aircraft.** The calculator reasons about rates, not about individual flights. Nothing ever queues, gets delayed or diverts.
 - **Nothing can change mid-run.** Every event is known before the run starts. You cannot interrupt it with a storm.
-- **Its ideas carry over, its code does not.** The airport and runway model, the logic that picks which runways can be used together in a given wind, and the time-ordered event queue are all rewritten in Rust for the new project. The calculator itself stays useful as a source of known-correct answers to check the new simulator against.
+- **Its ideas carry over, its code does not.** The airport and runway model, the logic that picks which runways can be used together in a given wind, and the time-ordered event queue are all rewritten in Rust for the new project.
 
 ## 3. The idea in plain terms
 
@@ -248,7 +248,8 @@ The old calculator's policies (curfew, maintenance schedule, wind schedule) reap
 
 **Done when.**
 - Running the same commands twice gives the same state fingerprint, both as a normal program and as WebAssembly in the browser.
-- When the airport is flooded with more flights than it can handle for a simulated year, the number it gets through matches the answer from the old Go calculator, for the constraints both models share (curfew, maintenance, wind and runway layout). For this comparison the simulator is set up the way the calculator sees the world: one aircraft type and one fixed gap per runway. The old calculator is run once per scenario and its answers are saved as expected values.
+- When a single runway with a single aircraft type is flooded with more flights than it can handle, the number of movements per hour matches the figure worked out by hand from the separation, approach speed and runway exit time tables.
+- Unit tests cover each of the four modelled aspects above, with expected values worked out from the rules themselves.
 
 **What you can show.** A web page that runs one airport and draws a timeline for each runway, with every landing and take-off as a mark, and gaps where a runway was closed.
 
@@ -262,6 +263,11 @@ This is the hardest phase and the core of the project.
 - **The host.** The single program described in section 5, with its time-ordered to-do list, its fake network, its fake disks and its seed.
 - **Faults.** The fake network can delay, drop, duplicate and reorder messages, and can cut a replica off from the others. The host can also crash a replica, which wipes its memory but leaves its fake disk, and restart it later.
 - **The agreement logic.** This is what makes three replicas keep identical logs. The proposal is to write an implementation of Raft, a well-documented agreement method designed to be understandable. In Raft one replica is the leader and the others are followers. Commands go to the leader, the leader copies them to the followers, and if the leader disappears the others elect a new one.
+- **Duplicate commands.** Anything that sends commands to an airport group is a *client* of it, and must expect to send the same command more than once. A leader can store a command and crash before replying, the network can duplicate a message, and a client that hears nothing will resend, possibly to a new leader. Raft on its own guarantees the log is agreed, not that each command appears in it only once. So:
+  - Every command carries the sending client's identity and a sequence number that the client increases by one for each new command. A resend reuses the original number.
+  - Duplicates are filtered when a command is *applied*, not when it is received. Each replica keeps a table of the highest sequence number applied for each client, together with the reply it gave. A command whose number is not above the client's entry is skipped, and the stored reply is sent again. Because the table is updated only by applying the agreed log, it is identical on all three replicas and is included in the state fingerprint.
+  - A client has at most one command outstanding at a time and retries it until it gets a reply, so the table needs only one entry per client.
+  - This sits in the replica, around the airport state machine. The airport state machine itself still knows nothing about clients or retries.
 - **The checkers.** Rules that must hold at every step of every run. They are listed in section 8.
 
 **Why now.** With the airport's rule book trusted from Phase 1, any bug found here must be in the new agreement logic. That keeps debugging narrow.
@@ -275,7 +281,7 @@ This is the hardest phase and the core of the project.
 **Goal.** A web app that lets you interfere with a running airport group, not only watch it.
 
 **What gets built.**
-- **The controller.** A new kind of participant inside the host, sitting above the airport group. Events from the outside world go to the controller. It finds the group's current leader and passes the events on as commands. It also sends the "the time is now X" commands that Rule 2 requires.
+- **The controller.** A new kind of participant inside the host, sitting above the airport group. Events from the outside world go to the controller. It finds the group's current leader and passes the events on as commands, numbering each one and resending with the same number until it is acknowledged, as Phase 2 describes. It also sends the "the time is now X" commands that Rule 2 requires.
 - **A speed dial.** Pause, real time, or many times faster. This only changes how quickly the host works through its to-do list. It does not change the outcome.
 - **Buttons for the airport.** Send a thunderstorm, close a runway, change the wind, declare a ground stop.
 - **Buttons for the machinery.** Crash a replica, restart it, cut it off from the others, make the network slow or lossy.
@@ -297,12 +303,12 @@ This is the hardest phase and the core of the project.
 - **A region controller.** It sits above the airport groups in one area, as in the picture in section 3.
 - **Flights with an origin and a destination.** When a flight departs one airport, that airport outputs "departed, heading for X, expected at time T". The region controller delivers this to airport X as an inbound flight.
 - **Diversions.** When an airport cannot accept a flight (storm, closure, ground stop), it says so, and the region controller chooses another airport in the region.
-- **Delay on news.** News of a closure or diversion takes a while to travel, in simulated time. This models the real lag between something happening and a flight plan being updated, which the voice note asked for. It needs no new machinery, because the host's fake network already delivers every message after a delay.
+- **Delay on news.** News of a closure or diversion takes a while to travel, in simulated time. This models the real lag between something happening and a flight plan being updated. It needs no new machinery, because the host's fake network already delivers every message after a delay.
 - **Region-wide events.** A storm has a position and a size. The region controller works out which airports are underneath it and sends each of them the appropriate command.
 
 **Keeping time in step.** Each airport group has its own log, so its sense of the time can run slightly ahead of or behind its neighbours. The rule is simple: an airport never goes back in time. If a message arrives stamped earlier than the airport's current time, it takes effect now. Because the host fixes the order in which everything happens, this is still exactly repeatable.
 
-**Making delivery reliable.** A message between groups may be sent more than once, for example when a leader changes halfway through sending. Each message carries a number, and the receiving airport ignores any number it has already seen.
+**Making delivery reliable.** A message between groups may be sent more than once, for example when a leader changes halfway through sending. Each sending airport group is treated as a client of the receiving group, using the same numbering that Phase 2 introduces for duplicate commands, so a repeated message is recognised and ignored.
 
 **Done when.** With three airports running, closing one causes its inbound flights to land at the other two, and replaying the same session produces the same outcome for every flight.
 
@@ -337,7 +343,7 @@ React handles the panels, buttons and controls. The constantly moving parts (air
 
 ## 8. How it is tested
 
-Testing is the heart of the "like TigerBeetle" idea. There are five layers, from fastest to slowest.
+Testing is the heart of the "like TigerBeetle" idea. There are four layers, from fastest to slowest.
 
 1. **Ordinary unit tests** of the airport state machine. Because it is pure logic with no network or clock, these are simple: given this state and this command, expect that state.
 2. **Random-input testing** of the airport state machine. A tool invents command sequences and looks for crashes or broken rules, then shrinks any failure down to the shortest sequence that still fails.
@@ -354,6 +360,7 @@ The checkers used in layers 2 and 3 are rules that must never be broken:
 - **Layout respected.** Runways that cross each other are never in use at the same time.
 - **No lost flights.** Every flight that was accepted eventually lands, departs, diverts or is cancelled, once any faults have cleared.
 - **No duplicated flights.** A flight is never in two places at once.
+- **Exactly once.** No command is applied twice, however many times it was sent.
 
 ## 9. Technology and repository layout
 
@@ -380,7 +387,7 @@ airport-simulator/
 │   ├── cli/        command-line program for bulk seeded runs
 │   └── wasm/       thin wrapper that exposes the host to the browser
 ├── web/            the React web app
-└── docs/           this proposal and later design notes
+└── design/         this proposal and later design notes
 ```
 
 The point of the split is that each component depends only on the ones above it in the list, and the `airport` component knows nothing about replicas, networks or browsers.
@@ -393,7 +400,7 @@ The point of the split is that each component depends only on the ones above it 
 | Something non-deterministic slips in | Replicas drift apart and replay stops working. | The automated ban from section 4, the fingerprint comparison, and the run-it-twice tests. |
 | The browser and the laptop disagree | A seed that fails overnight would not fail when replayed in the web app. | The run-it-twice test includes a WebAssembly run from Phase 1 onwards. |
 | Rust slows early progress | The host owns many participants that all change state, which is the kind of structure Rust is strictest about. | Phase 0 and Phase 1 are deliberately small. The host passes messages between participants rather than letting them hold references to each other, which sidesteps most of the difficulty. |
-| "It is not really distributed" | Nothing ever crosses a real network. | True, and accepted. The agreement logic is the real thing. Rule 3 keeps the door open, as section 12 describes. |
+| "It is not really distributed" | Nothing ever crosses a real network. | True, and accepted. The agreement logic is the real thing. Rule 3 keeps the door open. |
 | The aviation model swallows the project | Real air traffic control is bottomlessly detailed, and asking for accuracy invites more of it. | Accuracy is limited to the four aspects listed in Phase 1. Anything else needs a deliberate decision to add. |
 | The project is too big to finish | Six phases is a lot for spare time. | Every phase ends in something that runs and can be shown. |
 
@@ -401,7 +408,7 @@ The point of the split is that each component depends only on the ones above it 
 
 These are left out so that the distributed-systems work stays the focus.
 
-- Real networks, containers and Kubernetes. Section 12 covers how they could be added.
+- Real networks, containers and Kubernetes.
 - A server behind the web app. The host runs in the page.
 - Realistic airspace: routes, holding patterns, altitude, separation in the air.
 - Reduced separations that depend on weather, special procedures or newer regional schemes. The standard international minimums are used throughout.
@@ -410,7 +417,7 @@ These are left out so that the distributed-systems work stays the focus.
 - Real-world flight data. Traffic is generated, not imported.
 - More than three replicas per airport, or changing the number while running.
 
-## 13. Decisions
+## 12. Decisions
 
 Nothing is currently open. For the record, these were settled while the plan was being written:
 
@@ -421,6 +428,8 @@ Nothing is currently open. For the record, these were settled while the plan was
 | Write the agreement logic or use a library? | Write it by hand. |
 | How deep should the aviation go? | Shallow but accurate: the four aspects listed in Phase 1. |
 | Is this a concurrency project? | No. It is a distributed systems project, as section 3 explains. |
+| How are duplicate commands handled? | Client identities and sequence numbers, filtered when a command is applied. See Phase 2. |
+| Is the old calculator used to check results? | No. The simulator is checked against its own rules and hand-worked values. |
 
 ## Sources
 
