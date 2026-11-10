@@ -45,6 +45,8 @@ ban list in `clippy.toml` instead. Rust is pinned in `rust-toolchain.toml`.
 | `just run ARGS` | Run the CLI, e.g. `just run demo --seed 7` (`just run` alone prints usage) |
 | `just fmt` / `just clean` | Format Rust / remove build outputs |
 
+Run `just --list` for everything, grouped by setup, build, run, test and check.
+
 Bump `wasm-bindgen` in three places together: `Cargo.toml`, `justfile`, `.github/workflows/ci.yml`.
 
 ## Commits
