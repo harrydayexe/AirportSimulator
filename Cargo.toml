@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+[workspace.dependencies]
+airport = { path = "crates/airport" }
+raft = { path = "crates/raft" }
+host = { path = "crates/host" }
+# Pinned exactly: the wasm-bindgen CLI (see justfile and CI) must match this version.
+wasm-bindgen = "=0.2.130"
+
+# Determinism rules from docs/design-proposal.md section 4.
+# Banned paths live in clippy.toml.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+disallowed_types = "deny"
+disallowed_macros = "deny"
+float_arithmetic = "deny"
+
+[profile.release]
+opt-level = "s"
+lto = true

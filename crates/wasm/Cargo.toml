@@ -1,0 +1,17 @@
+[package]
+name = "airport-sim-wasm"
+description = "Thin WebAssembly wrapper that exposes the host to the web app."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+host.workspace = true
+wasm-bindgen.workspace = true
+
+[lints]
+workspace = true
