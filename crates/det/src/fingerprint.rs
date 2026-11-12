@@ -11,6 +11,7 @@ impl Fnv1a {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
 
+    /// A hasher in the standard FNV-1a starting state.
     #[must_use]
     pub const fn new() -> Self {
         Self(Self::OFFSET)
@@ -90,7 +91,7 @@ mod tests {
         assert_eq!(h.finish(), 0xaf63_dc4c_8601_ec8c);
         let mut h = Fnv1a::new();
         h.write(b"foobar");
-        assert_eq!(h.finish(), 0x85944171f73967e8);
+        assert_eq!(h.finish(), 0x8594_4171_f739_67e8);
     }
 
     #[test]

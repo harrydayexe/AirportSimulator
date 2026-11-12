@@ -8,11 +8,15 @@ use crate::{MS_PER_HOUR, Ms};
 /// What traffic to generate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrafficParams {
+    /// Seed for the generator; the same parameters give the same traffic.
     pub seed: u64,
     /// Flights ask for times in `start_ms..start_ms + duration_ms`.
     pub start_ms: Ms,
+    /// Length of the window flights ask for times in.
     pub duration_ms: Ms,
+    /// Arrivals requested per hour of `duration_ms`.
     pub arrivals_per_hour: u32,
+    /// Departures requested per hour of `duration_ms`.
     pub departures_per_hour: u32,
     /// How long before its requested time a flight files its request.
     pub notice_ms: Ms,
@@ -44,6 +48,8 @@ pub fn default_mix() -> Vec<(String, u32)> {
 }
 
 impl TrafficParams {
+    /// Traffic starting at time 0, with 20 minutes' notice and
+    /// [`default_mix`].
     #[must_use]
     pub fn new(
         seed: u64,
@@ -84,6 +90,10 @@ pub fn generate(params: &TrafficParams) -> Vec<Timed> {
         for _ in 0..count {
             let earliest_ms = params.start_ms + rng.below(params.duration_ms);
             let aircraft = pick(&params.mix, rng.below(total_weight));
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "the index is below AIRLINES.len(), so it fits in a usize"
+            )]
             let airline = AIRLINES[rng.below(AIRLINES.len() as u64) as usize];
             let flight = format!("{airline}{number}");
             number += 1;

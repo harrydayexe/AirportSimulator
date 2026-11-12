@@ -25,6 +25,7 @@ pub struct RunwayConfig {
     /// Heading in degrees true when using the `low` end. The `high` end is
     /// 180 degrees round.
     pub heading_deg: u16,
+    /// Usable length in metres. Aircraft needing more cannot use it.
     pub length_m: u32,
     /// Extra time an arrival takes to reach an exit on this runway, on top
     /// of the standard runway occupancy time for its class.
@@ -44,11 +45,16 @@ fn default_final_approach() -> u32 {
 fn default_inspection() -> Ms {
     DEFAULT_MAYDAY_INSPECTION_MS
 }
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "serde's default for an Option field must return an Option"
+)]
 fn default_hold() -> Option<Ms> {
     Some(DEFAULT_MAX_ARRIVAL_HOLD_MS)
 }
 
 impl RunwayConfig {
+    /// A runway with no extra exit time and the default crosswind limit.
     #[must_use]
     pub fn new(low: &str, high: &str, heading_deg: u16, length_m: u32) -> Self {
         Self {
@@ -81,7 +87,9 @@ impl RunwayConfig {
 /// An airport as configured before the run starts.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AirportConfig {
+    /// Display name, e.g. `Demo International`.
     pub name: String,
+    /// Every runway, at least one and at most [`MAX_RUNWAYS`].
     pub runways: Vec<RunwayConfig>,
     /// Pairs of runways that cross and so are never in use together, each
     /// named by either end or in full.
@@ -102,11 +110,17 @@ pub struct AirportConfig {
 /// What is wrong with an [`AirportConfig`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConfigError {
+    /// The airport has no runways.
     NoRunways,
+    /// The airport has more than [`MAX_RUNWAYS`] runways.
     TooManyRunways,
+    /// This runway end name is used more than once.
     DuplicateRunwayName(String),
+    /// This runway's heading is 360 or more.
     BadHeading(String),
+    /// A crossing names this runway, which does not exist.
     UnknownCrossing(String),
+    /// A crossing pairs this runway with itself.
     SelfCrossing(String),
 }
 
@@ -126,6 +140,7 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 impl AirportConfig {
+    /// An airport with no crossings and the default limits from `data.rs`.
     #[must_use]
     pub fn new(name: &str, runways: Vec<RunwayConfig>) -> Self {
         Self {

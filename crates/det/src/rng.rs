@@ -1,5 +1,5 @@
 //! The one seeded random number generator (design section 4). The algorithm
-//! is written out here, xoshiro256** seeded through SplitMix64, so that no
+//! is written out here, xoshiro256** seeded through `SplitMix64`, so that no
 //! library update can change the sequence a seed produces.
 
 /// A seeded generator. The same seed always gives the same sequence.
@@ -9,6 +9,7 @@ pub struct Rng {
 }
 
 impl Rng {
+    /// A generator whose sequence is fixed by `seed`.
     #[must_use]
     pub fn new(seed: u64) -> Self {
         let mut x = seed;
@@ -24,6 +25,7 @@ impl Rng {
         }
     }
 
+    /// The next value in the sequence, uniform over all of `u64`.
     pub fn next_u64(&mut self) -> u64 {
         let result = self.s[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
         let t = self.s[1] << 17;
@@ -37,6 +39,10 @@ impl Rng {
     }
 
     /// A uniform value in `0..n`, without bias. Returns 0 when `n` is 0.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Lemire's method compares the low 64 bits of the product"
+    )]
     pub fn below(&mut self, n: u64) -> u64 {
         if n == 0 {
             return 0;

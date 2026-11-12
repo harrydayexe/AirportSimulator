@@ -23,8 +23,11 @@ pub use det::{fingerprint, rng};
 /// Simulated time in whole milliseconds since the start of the run.
 pub type Ms = u64;
 
+/// Milliseconds in one minute.
 pub const MS_PER_MINUTE: Ms = 60_000;
+/// Milliseconds in one hour.
 pub const MS_PER_HOUR: Ms = 3_600_000;
+/// Milliseconds in one day.
 pub const MS_PER_DAY: Ms = 24 * MS_PER_HOUR;
 
 pub use command::{Command, Emergency, Output, Reason, RejectReason};

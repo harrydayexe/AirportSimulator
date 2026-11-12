@@ -117,6 +117,7 @@ pub const DEFAULT_CROSSWIND_LIMIT_KT: u16 = 25;
 pub struct AircraftType {
     /// ICAO type designator, e.g. `A320`.
     pub icao: &'static str,
+    /// Wake turbulence class, which sets the separation behind it.
     pub wake: WakeClass,
     /// Final approach speed in knots.
     pub approach_speed_kt: u32,

@@ -8,7 +8,8 @@ React web app. The full plan is in `design/design-proposal.md`.
 
 A Cargo workspace (`crates/`) plus a Bun/React app (`web/`). Each crate depends only on
 those listed before it: `det` holds the deterministic tools everything shares (the seeded
-`Rng`, the fingerprint, and identifier types such as `NodeId`, `Term` and `Index`); `airport`
+`Rng`, the fingerprint, identifier types such as `NodeId`, `Term` and `Index`, and the
+values a Raft node exchanges with the host, such as `Durable`, `Input` and `Effect`); `airport`
 is the pure state machine and knows nothing of replicas,
 networks or browsers; `raft` is the hand-written agreement logic; `host` runs every replica
 with a fake network, disk and clock; `cli` (binary `airport-sim`) and `wasm` are thin
@@ -32,6 +33,9 @@ Simulation code must be deterministic. `clippy.toml` and `[workspace.lints]` in 
 ban the real clock, `HashMap`/`HashSet`, threads, locks and float arithmetic; use `BTreeMap`,
 integer milliseconds, and avoid `usize` in saved state. Don't silence these lints; extend the
 ban list in `clippy.toml` instead. Rust is pinned in `rust-toolchain.toml`.
+
+`missing_docs` is on and clippy's `pedantic` group warns, so every public item, field and
+variant needs a doc comment, and `just check` (which denies warnings) fails without one.
 
 ## Commands
 

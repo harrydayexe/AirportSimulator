@@ -37,6 +37,19 @@ const REASONS: [Reason; 5] = [
     Reason::Other,
 ];
 
+/// A random value in `0..n`, in whatever integer type the caller needs.
+fn below<T: TryFrom<u64>>(rng: &mut Rng, n: u64) -> T
+where
+    T::Error: std::fmt::Debug,
+{
+    T::try_from(rng.below(n)).expect("a value below n fits the target type")
+}
+
+/// A random position in a list of `len` items.
+fn index(rng: &mut Rng, len: usize) -> usize {
+    below(rng, len as u64)
+}
+
 fn random_airport(rng: &mut Rng) -> AirportConfig {
     let mut config = match rng.below(4) {
         0 => AirportConfig::single_runway(),
@@ -45,15 +58,15 @@ fn random_airport(rng: &mut Rng) -> AirportConfig {
             let count = 1 + rng.below(4);
             let mut runways = Vec::new();
             for i in 0..count {
-                let heading = rng.below(180) as u16;
+                let heading = below(rng, 180);
                 let mut runway = RunwayConfig::new(
                     &format!("L{i}"),
                     &format!("H{i}"),
                     heading,
-                    1_500 + 500 * rng.below(6) as u32,
+                    1_500 + 500 * below::<u32>(rng, 6),
                 );
                 runway.exit_extra_ms = 5_000 * rng.below(4);
-                runway.crosswind_limit_kt = 15 + rng.below(20) as u16;
+                runway.crosswind_limit_kt = 15 + below::<u16>(rng, 20);
                 runways.push(runway);
             }
             let mut config = AirportConfig::new("Random", runways);
@@ -67,7 +80,7 @@ fn random_airport(rng: &mut Rng) -> AirportConfig {
             config
         }
     };
-    config.final_approach_nm = 3 + rng.below(10) as u32;
+    config.final_approach_nm = 3 + below::<u32>(rng, 10);
     config.mayday_inspection_ms = rng.below(20) * MS_PER_MINUTE;
     config.max_arrival_hold_ms = match rng.below(3) {
         0 => None,
@@ -85,7 +98,7 @@ fn random_scenario(seed: u64) -> Scenario {
 
     for i in 0..rng.below(400) {
         let flight = format!("F{i}");
-        let aircraft = AIRCRAFT_TYPES[rng.below(AIRCRAFT_TYPES.len() as u64) as usize]
+        let aircraft = AIRCRAFT_TYPES[index(&mut rng, AIRCRAFT_TYPES.len())]
             .icao
             .to_owned();
         let earliest_ms = rng.below(duration);
@@ -116,8 +129,8 @@ fn random_scenario(seed: u64) -> Scenario {
 
     for _ in 0..rng.below(40) {
         let at_ms = rng.below(duration);
-        let runway = &airport.runways[rng.below(airport.runways.len() as u64) as usize];
-        let reason = REASONS[rng.below(REASONS.len() as u64) as usize];
+        let runway = &airport.runways[index(&mut rng, airport.runways.len())];
+        let reason = REASONS[index(&mut rng, REASONS.len())];
         let command = match rng.below(9) {
             0 | 1 => Command::CloseRunway {
                 runway: runway.low.clone(),
@@ -128,18 +141,18 @@ fn random_scenario(seed: u64) -> Scenario {
                 reason,
             },
             4 | 5 => Command::SetWind {
-                direction_deg: rng.below(361) as u16,
-                speed_kt: rng.below(45) as u16,
+                direction_deg: below(&mut rng, 361),
+                speed_kt: below(&mut rng, 45),
             },
             6 => Command::GroundStop { reason },
             7 => Command::LiftGroundStop { reason },
             _ if !flights.is_empty() => {
-                let (flight, filed_ms) = &flights[rng.below(flights.len() as u64) as usize];
+                let (flight, filed_ms) = &flights[index(&mut rng, flights.len())];
                 timed.push(Timed {
                     at_ms: filed_ms + rng.below(40 * MS_PER_MINUTE),
                     command: Command::DeclareEmergency {
                         flight: flight.clone(),
-                        kind: [Emergency::PanPan, Emergency::Mayday][rng.below(2) as usize],
+                        kind: [Emergency::PanPan, Emergency::Mayday][index(&mut rng, 2)],
                     },
                 });
                 continue;
@@ -175,7 +188,7 @@ fn random_scenario(seed: u64) -> Scenario {
         },
     });
 
-    let tick_ms = [1_000, 5_000, 30_000, 4 * MS_PER_MINUTE][rng.below(4) as usize];
+    let tick_ms = [1_000, 5_000, 30_000, 4 * MS_PER_MINUTE][index(&mut rng, 4)];
     Scenario {
         airport,
         commands: script(timed, tick_ms, clear_ms + 30 * MS_PER_HOUR),
@@ -217,6 +230,10 @@ fn arrival_gap(leader: &AircraftType, follower: &AircraftType, final_nm: u64) ->
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pass over the outputs checks every rule; splitting it scatters the shared state"
+)]
 fn check(seed: u64, scenario: &Scenario, outputs: &[Output], end: &Airport) {
     let config = &scenario.airport;
     let crossing = config.validate().unwrap();

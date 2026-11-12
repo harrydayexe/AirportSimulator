@@ -1,8 +1,8 @@
 //! Deterministic tools shared by every crate ("det" for deterministic).
 //!
-//! The seeded random number generator, the state fingerprint, and the
-//! identifier types. Nothing here knows about airports, Raft or the host, so
-//! any crate can depend on it.
+//! The seeded random number generator, the state fingerprint, the
+//! identifier types, and the values a Raft node exchanges with the host. Nothing
+//! here knows about airports or the host, so any crate can depend on it.
 
 pub mod config;
 pub mod fingerprint;

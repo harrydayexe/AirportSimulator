@@ -10,6 +10,7 @@ use crate::data::SIN_E4;
 pub struct Wind {
     /// Degrees true the wind blows from, 0 to 359.
     pub direction_deg: u16,
+    /// Speed in knots.
     pub speed_kt: u16,
 }
 
@@ -34,12 +35,12 @@ pub fn components(wind: Wind, heading_deg: u16) -> Components {
     let diff = (wind.direction_deg % 360 + 360 - heading_deg % 360) % 360;
     let angle = if diff > 180 { 360 - diff } else { diff };
     let (cross, head) = if angle <= 90 {
-        (sin_e4(angle), sin_e4(90 - angle) as i64)
+        (sin_e4(angle), sin_e4(90 - angle).cast_signed())
     } else {
-        (sin_e4(180 - angle), -(sin_e4(angle - 90) as i64))
+        (sin_e4(180 - angle), -sin_e4(angle - 90).cast_signed())
     };
     Components {
-        headwind_e4: head * speed as i64,
+        headwind_e4: head * i64::from(wind.speed_kt),
         crosswind_e4: cross * speed,
     }
 }

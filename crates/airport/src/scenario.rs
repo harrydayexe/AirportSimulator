@@ -12,7 +12,9 @@ use crate::{MS_PER_HOUR, Ms, policy};
 /// A command and the simulated time at which it is sent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Timed {
+    /// When the command is sent.
     pub at_ms: Ms,
+    /// The command to send.
     pub command: Command,
 }
 
@@ -20,7 +22,9 @@ pub struct Timed {
 /// through the `advance_time` commands in the list.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Scenario {
+    /// The airport to build.
     pub airport: AirportConfig,
+    /// The commands to apply to it, in order.
     pub commands: Vec<Command>,
 }
 
@@ -154,7 +158,7 @@ mod tests {
             at_ms,
             command: Command::SetWind {
                 direction_deg: 0,
-                speed_kt: at_ms as u16,
+                speed_kt: u16::try_from(at_ms).unwrap(),
             },
         }
     }

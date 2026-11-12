@@ -17,9 +17,13 @@ use airport::scenario::{self, RunResult, Scenario};
 /// Options for the demonstration scenario.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DemoOptions {
+    /// Seed for the generator that places the flights.
     pub seed: u64,
+    /// How many hours of traffic to generate.
     pub hours: u32,
+    /// Arriving flights generated per hour.
     pub arrivals_per_hour: u32,
+    /// Departing flights generated per hour.
     pub departures_per_hour: u32,
 }
 

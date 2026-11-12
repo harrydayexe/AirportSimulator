@@ -39,7 +39,9 @@ use crate::wind::{Wind, components};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
+    /// Landing.
     Arrival,
+    /// Taking off.
     Departure,
 }
 
@@ -105,10 +107,15 @@ struct RunwayState {
 /// Running totals.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Stats {
+    /// Flights that joined the queue.
     pub accepted: u64,
+    /// Arrivals that landed.
     pub landed: u64,
+    /// Departures that took off.
     pub departed: u64,
+    /// Arrivals that diverted.
     pub diverted: u64,
+    /// Commands refused.
     pub rejected: u64,
     /// Sum of the delays of every flight that landed.
     pub arrival_delay_ms: Ms,
@@ -176,16 +183,19 @@ impl Airport {
         Ok(airport)
     }
 
+    /// The configuration the airport was built from.
     #[must_use]
     pub fn config(&self) -> &AirportConfig {
         &self.config
     }
 
+    /// The current simulated time.
     #[must_use]
     pub fn now_ms(&self) -> Ms {
         self.now_ms
     }
 
+    /// Running totals since time zero.
     #[must_use]
     pub fn stats(&self) -> Stats {
         self.stats
@@ -454,8 +464,8 @@ impl Airport {
 
         let mut best_set: u16 = 0;
         let mut best_score = (0u32, 0u64);
-        for set in 1..(1u32 << count) {
-            let set = set as u16;
+        // At most `MAX_RUNWAYS` (12) runways, so every set fits in a `u16`.
+        for set in 1..(1u16 << count) {
             if set & !candidates != 0 || set & longest == 0 {
                 continue;
             }
@@ -788,32 +798,46 @@ impl Airport {
 /// See [`Airport::snapshot`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
+    /// The current simulated time.
     pub now_ms: Ms,
+    /// The current wind.
     pub wind: Wind,
+    /// Reasons for the ground stops in force; empty when movements may run.
     pub ground_stops: Vec<Reason>,
+    /// Every runway, in configuration order.
     pub runways: Vec<RunwaySnapshot>,
     /// Waiting flights, front of the queue first.
     pub queue: Vec<QueuedFlight>,
+    /// Running totals since time zero.
     pub stats: Stats,
     /// The state fingerprint as 16 hexadecimal digits.
     pub fingerprint: String,
 }
 
+/// One runway in a [`Snapshot`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunwaySnapshot {
     /// The full name, e.g. `09L/27R`.
     pub name: String,
     /// The direction in use, or `None` if the runway is not in use.
     pub active_end: Option<String>,
+    /// Reasons the runway is closed; empty when it is open.
     pub closures: Vec<Reason>,
+    /// End of a mayday inspection still under way, if any.
     pub inspection_until_ms: Option<Ms>,
 }
 
+/// One waiting flight in a [`Snapshot`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueuedFlight {
+    /// The flight identifier.
     pub flight: String,
+    /// Landing or taking off.
     pub kind: Kind,
+    /// ICAO type designator, e.g. `A320`.
     pub aircraft: String,
+    /// The flight cannot move before this.
     pub ready_ms: Ms,
+    /// The emergency it has declared, if any.
     pub emergency: Option<Emergency>,
 }
