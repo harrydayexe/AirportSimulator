@@ -58,6 +58,11 @@ id! {
     Index(u64)
 }
 
+id! {
+    /// A timestamp provided with each message.
+    Ms(u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
