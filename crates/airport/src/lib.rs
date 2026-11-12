@@ -1,5 +1,3 @@
-//! The airport state machine (Phase 1).
-//!
 //! Pure logic: no clock, network, disk, threads or floats. It knows nothing
 //! about replicas, the host or browsers. An [`Airport`] is given one
 //! [`Command`] at a time and answers with [`Output`]s; the same commands

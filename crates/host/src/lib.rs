@@ -11,6 +11,14 @@
 
 pub use airport;
 pub use raft;
+pub mod browserhost;
+pub mod childhost;
+pub mod clock;
+pub mod event;
+pub mod host;
+pub mod queue;
+pub mod report;
+pub mod seeds;
 
 use airport::scenario::{self, RunResult, Scenario};
 
