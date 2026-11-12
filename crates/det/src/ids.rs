@@ -15,7 +15,7 @@
 //!
 //! All of them serialise as the bare number.
 
-use std::fmt;
+use std::{fmt, ops::Add};
 
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +61,20 @@ id! {
 id! {
     /// A timestamp provided with each message.
     Ms(u64)
+}
+
+impl From<Ms> for u64 {
+    fn from(val: Ms) -> Self {
+        val.0
+    }
+}
+
+impl Add for Ms {
+    fn add(self, rhs: Self) -> Self::Output {
+        Ms(self.0 + rhs.0)
+    }
+
+    type Output = Ms;
 }
 
 #[cfg(test)]

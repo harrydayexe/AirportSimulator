@@ -573,3 +573,122 @@ Phase 2 is finished when all of these are true.
 - [Students' Guide to Raft](https://thesquareplanet.com/blog/students-guide-to-raft/). A catalogue of the mistakes students make. It is a spoiler in the same way as ticket E4.
 - [tikv/raft-rs](https://github.com/tikv/raft-rs). Not used in this project, but written in the same "pure logic, no clock or network" shape, so useful to read when stuck on structure.
 - [We Put a Distributed Database In the Browser (TigerBeetle)](https://tigerbeetle.com/blog/2023-07-11-we-put-a-distributed-database-in-the-browser/). The fault levels in ticket C5 follow its three levels.
+
+## 10. Appendix: shape of `step` and `next_wake` (B1 to B6)
+
+This is an overview of how the pieces in tickets B1 to B6 fit together inside one node. It adds no new requirements. Where it picks between options, the choice is marked as a suggestion.
+
+### 10.1 Roles
+
+```mermaid
+stateDiagram-v2
+    [*] --> Follower: new / restart (from Durable)
+    Follower --> Candidate: Wake past election deadline
+    Candidate --> Candidate: Wake past election deadline (new term, new election)
+    Candidate --> Leader: majority of votes in this term
+    Candidate --> Follower: AppendEntries with term >= mine
+    Leader --> Follower: any message with a higher term
+    Candidate --> Follower: any message with a higher term
+```
+
+A crash is not a transition. The host throws the node away and builds a new one from `Durable`, which always starts as a follower (B6).
+
+### 10.2 State, split by what survives a crash
+
+| `Durable` (kept) | Volatile (lost) |
+|---|---|
+| `term`, `voted_for`, `log` | `role`, `commit`, `leader_hint` |
+| | `election_deadline: Option<Ms>` (follower, candidate) |
+| | `votes: set of NodeId` (candidate) |
+| | `heartbeat_deadline: Option<Ms>`, `next[peer]`, `matched[peer]` (leader) |
+
+### 10.3 Shape of `step`
+
+```text
+step(now, input):
+    effects = []
+
+    # 1. Time first. A Wake that is early or late is harmless because we only
+    #    compare against our own deadlines. Checking on every input, not just
+    #    Wake, means a late Wake can never hide an expired timer.
+    if role is Leader and now >= heartbeat_deadline:
+        send_append_to_all(); heartbeat_deadline = now + cfg.heartbeat
+    if role is not Leader and now >= election_deadline:
+        start_election(now)
+
+    # 2. Then the input.
+    match input:
+        Wake                  => nothing more to do
+        Propose(cmd)          => if Leader: append Entry{term, Command(cmd)}; send_append_to_all(); advance_commit()
+                                 else:      effects.push(NotLeader{hint: leader_hint})
+        Message{from, msg}    => handle_message(from, msg)
+
+    return effects
+```
+
+`advance_commit()` after a `Propose` matters for a cluster of one: the leader alone is a majority, so no reply will ever arrive to trigger it.
+
+### 10.4 `handle_message`
+
+Every message first goes through the term rule (B2), whatever its type:
+
+```text
+handle_message(from, msg):
+    if msg.term > term:
+        term = msg.term; voted_for = None; become Follower; leader_hint = None
+    if msg.term < term:
+        # stale. Requests get a refusal that carries our term; replies are dropped.
+        if msg is a request: send refusal(term) to from
+        return
+    dispatch on msg type...
+```
+
+| Message | Handling |
+|---|---|
+| **RequestVote** | Grant if `voted_for` is `None` or `from`, **and** the candidate's last (term, index) is at least ours. On grant, set `voted_for = from` and reset the election deadline. On refusal, do **not** reset it. |
+| **VoteReply** | Ignore unless we are a candidate in this term. Add the voter to `votes` (a set, so duplicates do nothing). On a majority, `become_leader`. |
+| **AppendEntries** | Same term as ours, so there is a leader: become Follower if candidate, set `leader_hint = from`, reset the election deadline. Run the consistency check (B3). Refuse on mismatch. Otherwise delete any conflicting suffix, append the new entries (B4), set `commit = min(leader_commit, index of last entry this message vouches for)`, and emit `Committed` for each newly covered position (B5). The reply states how far the logs are known to match. |
+| **AppendReply** | Ignore unless we are Leader in this term. On success: `matched[from] = max(matched[from], reply.matched)`, `next[from] = matched[from] + 1`, then `advance_commit()`. On refusal: `next[from] = max(1, next[from] - 1)` and resend to that peer. |
+
+Reasons for the choices above:
+- Replies carry what they matched rather than "the last thing I sent", and `matched` only moves up, so duplicated, late or reordered replies cannot move it backwards.
+- Only a valid message from a current-term leader, or a granted vote, resets the election deadline. A refused vote or a stale-term message must not, or a node that is being ignored could stay quiet forever.
+
+### 10.5 Transitions
+
+```text
+start_election(now):
+    term += 1; voted_for = self; role = Candidate; votes = {self}
+    election_deadline = now + random(base, 2*base)       # fresh random draw every time
+    send RequestVote(term, last_index, last_term) to each peer
+    if votes is already a majority: become_leader(now)    # cluster of one
+
+become_leader(now):
+    role = Leader; election_deadline = None
+    for each peer: next[peer] = log.len() + 1; matched[peer] = 0
+    append Entry{term, Noop}                              # B5: lets older entries commit
+    send_append_to_all(); heartbeat_deadline = now + cfg.heartbeat
+    advance_commit()                                      # cluster of one
+
+advance_commit():
+    # highest N above commit where a majority hold N (leader counts itself)
+    # AND log[N].term == current term; never move backwards
+    for each newly committed position i: effects.push(Committed{i, log[i]})
+```
+
+### 10.6 `next_wake`
+
+It is a pure read of the stored deadlines. It must not draw from the `Rng`, so two calls in a row give the same answer.
+
+```text
+next_wake():
+    match role:
+        Leader                 => heartbeat_deadline     # a leader has no election timer
+        Follower | Candidate   => election_deadline
+```
+
+In practice this is always `Some`. `None` is only needed for a leader with no peers, which has nothing to send. The host should re-read `next_wake` after every `step` and schedule a new `Wake` if it changed (C2). Older `Wake`s still fire and are ignored by the check at the top of `step`.
+
+### 10.7 Setting deadlines in `new`
+
+`Node::new(.., now)` takes a time so it can set `election_deadline = now + random(base, 2*base)` straight away. After a restart this makes the node wait a full timeout before it may stand for election, which gives a surviving leader time to reach it first (suggestion, not required by B6).
