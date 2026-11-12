@@ -55,6 +55,8 @@ pub enum Input<C> {
     Wake,
     /// A message from another node.
     Message {
+        /// Where the message came from.
+        from: NodeId,
         /// What it sent.
         message: Message<C>,
     },
@@ -107,23 +109,14 @@ pub enum Role {
 pub struct Message<C> {
     /// The term number of the sender.
     pub term: Term,
-    /// The ID of the sender node.
-    pub from: NodeId,
-    /// The ID of the intended recipient node.
-    pub to: NodeId,
     /// The acctual message sent.
     pub command: MessageCommand<C>,
 }
 
 impl<C> Message<C> {
     /// Create a new [`Message`].
-    pub fn new(term: Term, from: NodeId, to: NodeId, command: MessageCommand<C>) -> Self {
-        Self {
-            term,
-            from,
-            to,
-            command,
-        }
+    pub fn new(term: Term, command: MessageCommand<C>) -> Self {
+        Self { term, command }
     }
 }
 

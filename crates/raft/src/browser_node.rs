@@ -70,17 +70,17 @@ impl<C: Clone + Eq> BrowserNode<C> {
         unimplemented!("Please implement become_leader");
     }
 
-    fn handle_message(&mut self, message: Message<C>) -> Vec<Effect<C>> {
+    fn handle_message(&mut self, from: NodeId, message: Message<C>) -> Vec<Effect<C>> {
         if message.term > self.term {
             self.term = message.term;
             self.voted_for = None;
             self.role = Role::Follower;
-            self.leader_hint = Some(message.from);
+            self.leader_hint = Some(from);
         } else if message.term < self.term {
             // Message is stale
             // Requests get a refusal which carries our term. Replies are dropped.
             if message.command.is_request() {
-                self.send_refusal(message.from, self.term);
+                self.send_refusal(from, self.term);
                 return vec![];
             }
         }
@@ -88,19 +88,19 @@ impl<C: Clone + Eq> BrowserNode<C> {
         let mut effects = vec![];
         match message.command {
             MessageCommand::RequestVote => {
-                if self.voted_for.is_none_or(|v| v == message.from) {
+                if self.voted_for.is_none_or(|v| v == from) {
                     let response_message: Message<C> =
-                        Message::new(self.term, self.id, message.from, MessageCommand::VoteReply);
+                        Message::new(self.term, MessageCommand::VoteReply);
                     effects.push(Effect::Send {
-                        to: message.from,
+                        to: from,
                         message: response_message,
                     });
-                    self.voted_for = Some(message.from);
+                    self.voted_for = Some(from);
                 }
             }
             MessageCommand::VoteReply => {
                 if self.role == Role::Candidate {
-                    self.votes.insert(message.from);
+                    self.votes.insert(from);
                     if self.votes.len() >= self.majority() {
                         self.become_leader();
                     }
@@ -170,7 +170,7 @@ impl<C: Clone + Eq> Node<C> for BrowserNode<C> {
 
         match input {
             Input::Wake => todo!(),
-            Input::Message { message } => effects.extend(self.handle_message(message)),
+            Input::Message { from, message } => effects.extend(self.handle_message(from, message)),
             Input::Propose(command) => {
                 if self.role == Role::Leader {
                     self.append_entry(self.term, command);
