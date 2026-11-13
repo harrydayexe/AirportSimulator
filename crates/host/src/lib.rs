@@ -9,6 +9,7 @@
 //! Both wrappers go through the functions here, so the command line and the
 //! browser run exactly the same code.
 
+mod hash;
 pub use airport;
 pub use raft;
 pub mod browserhost;
