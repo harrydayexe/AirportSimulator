@@ -27,6 +27,15 @@ random commands to random airports and checks the rules of design section 8
 `web/src/sim.test.ts` runs the same scenario natively and as WebAssembly and requires identical
 output, so anything added to `Airport` must derive `Hash` to stay in the fingerprint.
 
+## Invariants
+
+`design/invariants.md` lists the assertions and the IDs (A7, N20, ...) the code cites. Anything a
+`Command`, scenario file or CLI argument can cause is rejected, never asserted: a panic in
+`Airport::apply` would stop every replica at the same log position. O(1) checks use `assert!`
+(not `debug_assert!`, so native and browser builds stop at the same step), and release builds keep
+overflow checks on. Whole-state scans (`Airport::check_invariants`, `BrowserNode::check_invariants`)
+run after every `apply`/`step` in debug builds and tests, or in release with the `paranoid` feature.
+
 ## Determinism rules
 
 Simulation code must be deterministic. `clippy.toml` and `[workspace.lints]` in `Cargo.toml`

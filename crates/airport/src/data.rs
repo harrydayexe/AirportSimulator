@@ -112,6 +112,25 @@ pub const DEFAULT_FINAL_APPROACH_NM: u32 = 6;
 /// Crosswind limit used for a runway unless it sets its own, in knots.
 pub const DEFAULT_CROSSWIND_LIMIT_KT: u16 = 25;
 
+/// Latest simulated time an airport accepts: about 100 years. Every time the
+/// rules add to stays far enough below `u64::MAX` that no sum can overflow.
+pub const MAX_TIME_MS: Ms = 100 * 365 * 24 * 3_600_000;
+
+/// How far ahead a flight may ask for a slot: 120 hours, the earliest a
+/// flight plan can be filed before departure (ICAO Doc 4444, EUROCONTROL
+/// IFPS).
+pub const MAX_FILING_AHEAD_MS: Ms = 120 * 3_600_000;
+
+/// Upper bounds on the configurable times and distances, so a configuration
+/// file cannot push the arithmetic past `u64` (see [`MAX_TIME_MS`]).
+pub const MAX_EXIT_EXTRA_MS: Ms = 10 * 60_000;
+/// See [`MAX_EXIT_EXTRA_MS`].
+pub const MAX_MAYDAY_INSPECTION_MS: Ms = 24 * 3_600_000;
+/// See [`MAX_EXIT_EXTRA_MS`].
+pub const MAX_ARRIVAL_HOLD_MS: Ms = 24 * 3_600_000;
+/// See [`MAX_EXIT_EXTRA_MS`].
+pub const MAX_FINAL_APPROACH_NM: u32 = 50;
+
 /// The short performance table kept for each aircraft type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AircraftType {
@@ -163,9 +182,17 @@ pub fn aircraft_index(icao: &str) -> Option<u16> {
 }
 
 /// The type at a position previously returned by [`aircraft_index`].
+///
+/// # Panics
+/// If `index` is not a position in [`AIRCRAFT_TYPES`] (D7).
 #[must_use]
 pub fn aircraft(index: u16) -> &'static AircraftType {
-    &AIRCRAFT_TYPES[usize::from(index)]
+    AIRCRAFT_TYPES.get(usize::from(index)).unwrap_or_else(|| {
+        panic!(
+            "aircraft index {index} is outside the table of {}",
+            AIRCRAFT_TYPES.len()
+        )
+    })
 }
 
 /// `sin(d degrees) * 10 000`, rounded, for d in 0..=90. A fixed table because
@@ -182,6 +209,64 @@ pub const SIN_E4: [u32; 91] = [
     9848, 9877, 9903, 9925, 9945, 9962, 9976, 9986, 9994, 9998, //
     10000,
 ];
+
+// Facts about the tables above that the rules rely on. Checked when the
+// crate is built, so a bad edit to a table fails the build, not a run.
+const _: () = {
+    // D1, D2: `approach_gap_ms` divides by the approach speed; every type
+    // needs some runway; and a position fits the `u16` saved state uses.
+    assert!(AIRCRAFT_TYPES.len() <= u16::MAX as usize);
+    let mut i = 0;
+    while i < AIRCRAFT_TYPES.len() {
+        assert!(AIRCRAFT_TYPES[i].approach_speed_kt > 0);
+        assert!(AIRCRAFT_TYPES[i].runway_m > 0);
+        i += 1;
+    }
+
+    // D3: `sealed` is only sound if no movement is shorter than this.
+    let mut smallest = Ms::MAX;
+    let mut found = false;
+    let mut c = 0;
+    while c < 4 {
+        let (a, d) = (ARRIVAL_OCCUPANCY_MS[c], DEPARTURE_OCCUPANCY_MS[c]);
+        smallest = if a < smallest { a } else { smallest };
+        smallest = if d < smallest { d } else { smallest };
+        found = found || a == MIN_OCCUPANCY_MS || d == MIN_OCCUPANCY_MS;
+        c += 1;
+    }
+    assert!(found && smallest == MIN_OCCUPANCY_MS);
+
+    // D4: the sine table runs from 0 to 1 and never falls.
+    assert!(SIN_E4[0] == 0 && SIN_E4[90] == 10_000);
+    let mut d = 1;
+    while d < SIN_E4.len() {
+        assert!(SIN_E4[d - 1] <= SIN_E4[d]);
+        d += 1;
+    }
+
+    // D5: a heavier follower never needs more room than a lighter one
+    // behind the same leader.
+    let mut leader = 0;
+    while leader < 4 {
+        let mut follower = 1;
+        while follower < 4 {
+            assert!(WAKE_APPROACH_NM[leader][follower] <= WAKE_APPROACH_NM[leader][follower - 1]);
+            assert!(WAKE_DEPARTURE_MS[leader][follower] <= WAKE_DEPARTURE_MS[leader][follower - 1]);
+            follower += 1;
+        }
+        leader += 1;
+    }
+
+    // The time cap leaves room for every sum the rules make on top of it.
+    assert!(
+        MAX_TIME_MS
+            < Ms::MAX / 4
+                - MAX_FILING_AHEAD_MS
+                - MAX_ARRIVAL_HOLD_MS
+                - MAX_MAYDAY_INSPECTION_MS
+                - MAX_EXIT_EXTRA_MS
+    );
+};
 
 #[cfg(test)]
 mod tests {
@@ -222,15 +307,6 @@ mod tests {
         assert_eq!(departure_separation_ms(Super, Heavy), 120_000);
         assert_eq!(departure_separation_ms(Medium, Medium), 60_000);
         assert_eq!(departure_separation_ms(Heavy, Heavy), 60_000);
-    }
-
-    #[test]
-    fn min_occupancy_is_the_smallest_table_entry() {
-        let smallest = ARRIVAL_OCCUPANCY_MS
-            .iter()
-            .chain(&DEPARTURE_OCCUPANCY_MS)
-            .min();
-        assert_eq!(smallest, Some(&MIN_OCCUPANCY_MS));
     }
 
     #[test]

@@ -24,10 +24,16 @@ pub struct Components {
 }
 
 fn sin_e4(deg: u16) -> u64 {
-    u64::from(SIN_E4[usize::from(deg.min(90))])
+    // W1: callers fold the angle into 0..=90 first. Clamping instead would
+    // turn a geometry bug into a wrong but plausible crosswind.
+    assert!(deg <= 90, "sin_e4({deg}): angle outside 0..=90");
+    u64::from(SIN_E4[usize::from(deg)])
 }
 
 /// Components of `wind` for an aircraft using a runway on `heading_deg`.
+///
+/// # Panics
+/// Never, unless the angle folding below is broken.
 #[must_use]
 pub fn components(wind: Wind, heading_deg: u16) -> Components {
     let speed = u64::from(wind.speed_kt);
@@ -39,10 +45,14 @@ pub fn components(wind: Wind, heading_deg: u16) -> Components {
     } else {
         (sin_e4(180 - angle), -sin_e4(angle - 90).cast_signed())
     };
-    Components {
+    let result = Components {
         headwind_e4: head * i64::from(wind.speed_kt),
         crosswind_e4: cross * speed,
-    }
+    };
+    // W2: neither component is more than the wind itself.
+    assert!(result.crosswind_e4 <= speed * 10_000);
+    assert!(result.headwind_e4.unsigned_abs() <= speed * 10_000);
+    result
 }
 
 #[cfg(test)]

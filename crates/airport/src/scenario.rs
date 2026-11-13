@@ -42,9 +42,13 @@ pub struct RunResult {
 /// Turns timed commands into the list an airport is fed: the commands in
 /// time order (ties keep their given order), with an `advance_time` before
 /// each new moment and one every `tick_ms` up to `end_ms`.
+///
+/// # Panics
+/// Never, unless the interleaving below is broken (SC1).
 #[must_use]
 pub fn script(mut timed: Vec<Timed>, tick_ms: Ms, end_ms: Ms) -> Vec<Command> {
     timed.sort_by_key(|t| t.at_ms);
+    let sent_at: Vec<Ms> = timed.iter().map(|t| t.at_ms).collect();
     let tick_ms = tick_ms.max(1);
     let mut commands = Vec::new();
     let mut now = 0;
@@ -67,6 +71,28 @@ pub fn script(mut timed: Vec<Timed>, tick_ms: Ms, end_ms: Ms) -> Vec<Command> {
         commands.push(t.command);
     }
     advance(&mut commands, end_ms);
+
+    // SC1: the clock only moves forward, every command is sent once, and
+    // each is sent once the clock reads its own time.
+    let mut clock: Option<Ms> = None;
+    let mut sent_at = sent_at.into_iter();
+    for command in &commands {
+        if let Command::AdvanceTime { now_ms } = command {
+            assert!(
+                clock.is_none_or(|c| *now_ms > c),
+                "script: clock not rising"
+            );
+            clock = Some(*now_ms);
+        } else {
+            let at_ms = sent_at.next().expect("script: more commands than given");
+            assert_eq!(
+                at_ms,
+                clock.unwrap_or(0),
+                "script: command sent at the wrong time"
+            );
+        }
+    }
+    assert!(sent_at.next().is_none(), "script: a command was lost");
     commands
 }
 

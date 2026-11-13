@@ -26,10 +26,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::Ms;
 use crate::command::{Command, DivertReason, Emergency, Output, Reason, RejectReason};
+use crate::config::MAX_RUNWAYS;
 use crate::config::{AirportConfig, ConfigError};
 use crate::data::{
-    MIN_OCCUPANCY_MS, aircraft, aircraft_index, arrival_occupancy_ms, departure_occupancy_ms,
-    departure_separation_ms,
+    AIRCRAFT_TYPES, MAX_FILING_AHEAD_MS, MAX_TIME_MS, MIN_OCCUPANCY_MS, aircraft, aircraft_index,
+    arrival_occupancy_ms, departure_occupancy_ms, departure_separation_ms,
 };
 use crate::fingerprint::fingerprint;
 use crate::separation::approach_gap_ms;
@@ -48,6 +49,11 @@ pub enum Kind {
 const PRIORITY_MAYDAY: u8 = 0;
 const PRIORITY_PAN_PAN: u8 = 1;
 const PRIORITY_NORMAL: u8 = 2;
+
+// D6: `divert_overdue` relies on normal sorting last, and the "upgrade only"
+// rule for emergencies on the derived order of `Emergency`.
+const _: () = assert!(PRIORITY_MAYDAY < PRIORITY_PAN_PAN && PRIORITY_PAN_PAN < PRIORITY_NORMAL);
+const _: () = assert!((Emergency::PanPan as u8) < (Emergency::Mayday as u8));
 
 fn priority(emergency: Option<Emergency>) -> u8 {
     match emergency {
@@ -129,6 +135,15 @@ struct Claim {
     at_ms: Ms,
     kind: Kind,
     aircraft: u16,
+}
+
+/// What one `apply` is compared against (A11, A13).
+#[cfg(any(debug_assertions, feature = "paranoid"))]
+struct Before {
+    now_ms: Ms,
+    next_seq: u64,
+    stats: Stats,
+    inspection_until_ms: Vec<Ms>,
 }
 
 /// One airport. See the module documentation.
@@ -224,7 +239,36 @@ impl Airport {
     }
 
     /// Applies one command and returns what the airport decided.
+    ///
+    /// # Panics
+    /// Only on a bug in the airport: every command, whatever its values, is
+    /// either applied or rejected. Debug builds (and the `paranoid` feature)
+    /// also run [`Airport::check_invariants`] after every command.
     pub fn apply(&mut self, command: &Command) -> Vec<Output> {
+        #[cfg(any(debug_assertions, feature = "paranoid"))]
+        let before = Before {
+            now_ms: self.now_ms,
+            next_seq: self.next_seq,
+            stats: self.stats,
+            inspection_until_ms: self.runways.iter().map(|r| r.inspection_until_ms).collect(),
+        };
+        let out = self.apply_inner(command);
+        #[cfg(any(debug_assertions, feature = "paranoid"))]
+        {
+            // A tick that decided nothing changed only the clock, so only the
+            // rules that depend on the time need checking. Scanning everything
+            // after every tick made the random-command tests ten times slower.
+            if out.is_empty() && matches!(command, Command::AdvanceTime { .. }) {
+                self.check_clock_rules();
+            } else {
+                self.check_invariants();
+            }
+            self.check_apply(&before, command, &out);
+        }
+        out
+    }
+
+    fn apply_inner(&mut self, command: &Command) -> Vec<Output> {
         let mut out = Vec::new();
         match command {
             Command::AdvanceTime { now_ms } => self.advance_time(*now_ms, &mut out),
@@ -283,6 +327,9 @@ impl Airport {
     }
 
     fn advance_time(&mut self, now_ms: Ms, out: &mut Vec<Output>) {
+        if now_ms > MAX_TIME_MS {
+            return self.reject("clock", RejectReason::InvalidTime, out);
+        }
         if now_ms < self.now_ms {
             return;
         }
@@ -303,6 +350,9 @@ impl Airport {
         if self.flights.contains_key(id) {
             return self.reject(id, RejectReason::DuplicateFlight, out);
         }
+        if earliest_ms > self.now_ms + MAX_FILING_AHEAD_MS {
+            return self.reject(id, RejectReason::InvalidTime, out);
+        }
         let Some(index) = aircraft_index(aircraft_code) else {
             return self.reject(id, RejectReason::UnknownAircraft, out);
         };
@@ -317,8 +367,15 @@ impl Airport {
             ready_ms: earliest_ms.max(self.now_ms),
             emergency: None,
         };
+        let sizes = (self.queue.len(), self.flights.len(), self.stats.accepted);
         self.enqueue(flight);
         self.stats.accepted += 1;
+        // A15
+        assert_eq!(
+            (self.queue.len(), self.flights.len(), self.stats.accepted),
+            (sizes.0 + 1, sizes.1 + 1, sizes.2 + 1),
+            "request: {id} not added exactly once"
+        );
         out.push(Output::Accepted {
             flight: id.to_owned(),
             at_ms: self.now_ms,
@@ -334,22 +391,41 @@ impl Airport {
         self.next_seq += 1;
         self.flights
             .insert(flight.id.clone(), FlightStatus::Queued(key));
-        self.queue.insert(key, flight);
+        // A16: a key collision would silently drop a flight.
+        let id = flight.id.clone();
+        assert!(
+            self.queue.insert(key, flight).is_none(),
+            "enqueue: {id} collided with {key:?}"
+        );
     }
 
     fn declare_emergency(&mut self, id: &str, kind: Emergency, out: &mut Vec<Output>) {
         let Some(FlightStatus::Queued(key)) = self.flights.get(id).copied() else {
             return self.reject(id, RejectReason::UnknownFlight, out);
         };
-        let Some(mut flight) = self.queue.remove(&key) else {
-            return;
-        };
+        // A17: `flights` and `queue` always agree (A2).
+        let queued = self.queue.len();
+        let mut flight = self
+            .queue
+            .remove(&key)
+            .unwrap_or_else(|| panic!("declare_emergency: {id} listed as queued but not in queue"));
+        let previous = flight.emergency;
         // An emergency can be upgraded but not downgraded.
         let changed = flight.emergency.is_none_or(|current| kind > current);
         if changed {
             flight.emergency = Some(kind);
         }
+        // A18
+        assert!(
+            flight.emergency >= previous,
+            "declare_emergency: {id} downgraded"
+        );
         self.enqueue(flight);
+        assert_eq!(
+            self.queue.len(),
+            queued,
+            "declare_emergency: queue size changed"
+        );
         if changed {
             out.push(Output::EmergencyDeclared {
                 flight: id.to_owned(),
@@ -387,6 +463,12 @@ impl Airport {
             });
         }
         self.reconfigure(out);
+        // A19
+        let runway = &self.runways[r];
+        assert!(
+            runway.closures.is_empty() || !runway.active,
+            "set_closure: closed runway {name} still in use"
+        );
     }
 
     fn set_wind(&mut self, direction_deg: u16, speed_kt: u16, out: &mut Vec<Output>) {
@@ -432,6 +514,8 @@ impl Airport {
     fn reconfigure(&mut self, out: &mut Vec<Output>) {
         let before = self.active_runways();
         let count = self.runways.len();
+        // A20: so `1u16 << count` cannot overflow.
+        assert!(count <= MAX_RUNWAYS, "reconfigure: {count} runways");
         let mut candidates: u16 = 0;
         let mut crosswind = vec![0u64; count];
         let mut high_end = vec![false; count];
@@ -481,6 +565,16 @@ impl Airport {
             }
         }
 
+        // A21 (the rest of A7 is in `check_invariants`).
+        assert_eq!(
+            best_set & !candidates,
+            0,
+            "reconfigure: non-candidate chosen"
+        );
+        assert!(
+            candidates == 0 || best_set != 0,
+            "reconfigure: candidates {candidates:#b} but nothing chosen"
+        );
         for (r, runway) in self.runways.iter_mut().enumerate() {
             runway.active = best_set & (1 << r) != 0;
             runway.high_end = high_end[r];
@@ -499,7 +593,7 @@ impl Airport {
     fn gap(&self, r: usize, kind: Kind, index: u16, next_kind: Kind, next_index: u16) -> Ms {
         let leader = aircraft(index);
         let follower = aircraft(next_index);
-        match kind {
+        let gap = match kind {
             Kind::Arrival => {
                 let occupancy =
                     arrival_occupancy_ms(leader.wake) + self.config.runways[r].exit_extra_ms;
@@ -521,7 +615,10 @@ impl Airport {
                     occupancy
                 }
             }
-        }
+        };
+        // A22: `sealed` is only sound if no gap is shorter.
+        assert!(gap >= MIN_OCCUPANCY_MS, "gap of {gap} ms on runway {r}");
+        gap
     }
 
     /// When runway `r` is next clear of aircraft and inspections.
@@ -566,6 +663,9 @@ impl Airport {
                 t = t.max(self.busy_until(c));
             }
         }
+        // A23: one at a time, and the layout respected, at the point of
+        // decision.
+        assert!(t >= flight.ready_ms && t >= floor_ms && t >= self.busy_until(r));
         Some(t)
     }
 
@@ -578,11 +678,24 @@ impl Airport {
     /// `floor_ms` is the previous clock time: nothing is decided now for a
     /// moment before it.
     fn schedule(&mut self, floor_ms: Ms, out: &mut Vec<Output>) {
+        /// Counts runway `r` out of `open`, once only (A25).
+        fn seal(sealed: &mut [bool], r: usize, open: &mut usize) {
+            assert!(!sealed[r], "schedule: runway {r} sealed twice");
+            sealed[r] = true;
+            *open = open
+                .checked_sub(1)
+                .expect("schedule: open runways underflow");
+        }
+
+        // A24
+        assert!(floor_ms <= self.now_ms, "schedule: floor after now");
         if !self.ground_stops.is_empty() {
             return;
         }
         let count = self.runways.len();
         let mut claims: Vec<Option<Claim>> = vec![None; count];
+        // Runways already counted out of `open`.
+        let mut sealed = vec![false; count];
         // Runways on which a flight further back might still fit.
         let mut open = self.runways.iter().filter(|r| r.active).count();
         let mut cursor: Option<QueueKey> = None;
@@ -625,26 +738,46 @@ impl Airport {
             }
             if t > self.now_ms {
                 if claims[r].is_none() {
+                    // A26 holds by the branch above.
                     claims[r] = Some(Claim {
                         at_ms: t,
                         kind: flight.kind,
                         aircraft: flight.aircraft,
                     });
                     if self.sealed(r, t, floor_ms) {
-                        open -= 1;
+                        seal(&mut sealed, r, &mut open);
                     }
                 }
                 continue;
             }
 
-            let Some(flight) = self.queue.remove(&key) else {
-                break;
-            };
+            // A25, A27: nobody is performed who would delay a flight ahead
+            // of them, or on a runway that could not take them.
+            assert!(!sealed[r], "schedule: movement on sealed runway {r}");
+            assert!(floor_ms <= t && t <= self.now_ms);
+            assert!(self.ground_stops.is_empty());
+            assert!(
+                self.runways[r].active
+                    && self.config.runways[r].length_m >= aircraft(flight.aircraft).runway_m
+            );
+            if let Some(claim) = claims[r] {
+                assert!(
+                    t + self.gap_behind(r, flight, claim) <= claim.at_ms,
+                    "schedule: {} at {t} ms delays the claim at {} ms",
+                    flight.id,
+                    claim.at_ms
+                );
+            }
+            // A28: the key was just read from the queue.
+            let flight = self
+                .queue
+                .remove(&key)
+                .expect("schedule: key just read is missing");
             self.perform(&flight, r, t, out);
             if let Some(claim) = claims[r]
                 && self.sealed(r, claim.at_ms, floor_ms)
             {
-                open -= 1;
+                seal(&mut sealed, r, &mut open);
             }
         }
     }
@@ -652,6 +785,7 @@ impl Airport {
     /// Minimum time from `flight` using runway `r` to the claimed movement.
     fn gap_behind(&self, r: usize, flight: &Flight, claim: Claim) -> Ms {
         let gap = self.gap(r, flight.kind, flight.aircraft, claim.kind, claim.aircraft);
+        // A32 holds by `max`.
         if flight.kind == Kind::Arrival && flight.emergency == Some(Emergency::Mayday) {
             let occupancy = arrival_occupancy_ms(aircraft(flight.aircraft).wake)
                 + self.config.runways[r].exit_extra_ms;
@@ -661,12 +795,16 @@ impl Airport {
         }
     }
 
-    /// The moment an ordinary arrival gives up waiting, if there is one.
+    /// The moment an ordinary arrival gives up waiting, if there is one
+    /// (A33: only ordinary arrivals have one).
     fn hold_deadline(&self, flight: &Flight) -> Option<Ms> {
         if flight.kind == Kind::Arrival && flight.emergency.is_none() {
-            self.config
-                .max_arrival_hold_ms
-                .map(|hold| flight.ready_ms + hold)
+            self.config.max_arrival_hold_ms.map(|hold| {
+                flight
+                    .ready_ms
+                    .checked_add(hold)
+                    .expect("hold deadline overflow")
+            })
         } else {
             None
         }
@@ -676,6 +814,28 @@ impl Airport {
     fn perform(&mut self, flight: &Flight, r: usize, at_ms: Ms, out: &mut Vec<Output>) {
         let ty = aircraft(flight.aircraft);
         let runway = self.end_name(r).to_owned();
+        // A29, A30: never before the flight is ready, during an inspection,
+        // too close behind the last movements, or after it would have
+        // diverted.
+        let id = &flight.id;
+        assert!(at_ms >= flight.ready_ms, "perform: {id} before it is ready");
+        let state = &self.runways[r];
+        assert!(
+            at_ms >= state.inspection_until_ms,
+            "perform: {id} during an inspection"
+        );
+        for (kind, last) in [
+            (Kind::Arrival, state.last_arrival),
+            (Kind::Departure, state.last_departure),
+        ] {
+            if let Some(last) = last {
+                let gap = self.gap(r, kind, last.aircraft, flight.kind, flight.aircraft);
+                assert!(at_ms >= last.at_ms + gap, "perform: {id} too close behind");
+            }
+        }
+        if let Some(deadline) = self.hold_deadline(flight) {
+            assert!(at_ms <= deadline, "perform: {id} after its hold limit");
+        }
         let delay_ms = at_ms - flight.ready_ms;
         let last = Some(Last {
             at_ms,
@@ -686,7 +846,12 @@ impl Airport {
                 let vacated_ms =
                     at_ms + arrival_occupancy_ms(ty.wake) + self.config.runways[r].exit_extra_ms;
                 self.runways[r].last_arrival = last;
-                self.flights.insert(flight.id.clone(), FlightStatus::Landed);
+                let previous = self.flights.insert(flight.id.clone(), FlightStatus::Landed);
+                // A31
+                assert!(
+                    matches!(previous, Some(FlightStatus::Queued(_))),
+                    "perform: {id} landed from {previous:?}"
+                );
                 self.stats.landed += 1;
                 self.stats.arrival_delay_ms += delay_ms;
                 out.push(Output::Landed {
@@ -701,6 +866,11 @@ impl Airport {
                 let inspection = self.config.mayday_inspection_ms;
                 if flight.emergency == Some(Emergency::Mayday) && inspection > 0 {
                     let until_ms = vacated_ms + inspection;
+                    // A31
+                    assert!(
+                        until_ms > self.runways[r].inspection_until_ms && until_ms > vacated_ms,
+                        "perform: inspection after {id} does not extend the last one"
+                    );
                     self.runways[r].inspection_until_ms = until_ms;
                     out.push(Output::RunwayInspection {
                         runway: self.config.runways[r].name(),
@@ -711,8 +881,14 @@ impl Airport {
             }
             Kind::Departure => {
                 self.runways[r].last_departure = last;
-                self.flights
+                let previous = self
+                    .flights
                     .insert(flight.id.clone(), FlightStatus::Departed);
+                // A31
+                assert!(
+                    matches!(previous, Some(FlightStatus::Queued(_))),
+                    "perform: {id} departed from {previous:?}"
+                );
                 self.stats.departed += 1;
                 self.stats.departure_delay_ms += delay_ms;
                 out.push(Output::Departed {
@@ -746,12 +922,25 @@ impl Airport {
             .map(|(key, _)| *key)
             .collect();
         for key in overdue {
-            let Some(flight) = self.queue.remove(&key) else {
-                continue;
-            };
+            // A34
+            let flight = self
+                .queue
+                .remove(&key)
+                .expect("divert_overdue: key just read is missing");
+            let at_ms = flight.ready_ms + hold;
+            assert!(
+                flight.kind == Kind::Arrival && flight.emergency.is_none(),
+                "divert_overdue: {} is not an ordinary arrival",
+                flight.id
+            );
+            assert!(
+                at_ms <= self.now_ms,
+                "divert_overdue: {} not yet due",
+                flight.id
+            );
             self.stats.diverted += 1;
             out.push(Output::Diverted {
-                at_ms: flight.ready_ms + hold,
+                at_ms,
                 reason: DivertReason::HoldLimit,
                 flight: flight.id.clone(),
             });
@@ -760,9 +949,12 @@ impl Airport {
     }
 
     /// A description of the current state for display.
+    ///
+    /// # Panics
+    /// Never: a `u64` always prints as 16 hexadecimal digits (A36).
     #[must_use]
     pub fn snapshot(&self) -> Snapshot {
-        Snapshot {
+        let snapshot = Snapshot {
             now_ms: self.now_ms,
             wind: self.wind,
             ground_stops: self.ground_stops.iter().copied().collect(),
@@ -791,6 +983,222 @@ impl Airport {
                 .collect(),
             stats: self.stats,
             fingerprint: format!("{:016x}", self.fingerprint()),
+        };
+        assert_eq!(snapshot.fingerprint.len(), 16);
+        snapshot
+    }
+
+    /// Checks every rule that holds whenever the airport is at rest (A1 to
+    /// A12 in `design/invariants.md`). Scans the whole state, so it runs
+    /// after every [`Airport::apply`] only in debug builds or with the
+    /// `paranoid` feature; tests may call it at any time.
+    ///
+    /// # Panics
+    /// On the first rule found broken. Every one of them is a bug.
+    pub fn check_invariants(&self) {
+        let count = self.runways.len();
+        // A1
+        assert!((1..=MAX_RUNWAYS).contains(&count), "A1: {count} runways");
+        assert_eq!(count, self.config.runways.len(), "A1");
+        assert_eq!(count, self.crossing.len(), "A1");
+
+        // A2, A3, A5
+        let mut seqs = Vec::with_capacity(self.queue.len());
+        for (key, flight) in &self.queue {
+            let id = &flight.id;
+            assert_eq!(
+                self.flights.get(id),
+                Some(&FlightStatus::Queued(*key)),
+                "A2: {id} queued at {key:?} but listed otherwise"
+            );
+            assert_eq!(key.priority, priority(flight.emergency), "A3: {id}");
+            assert_eq!(key.ready_ms, flight.ready_ms, "A3: {id}");
+            assert!(key.seq < self.next_seq, "A3: {id} has a future seq");
+            seqs.push(key.seq);
+            assert!(
+                usize::from(flight.aircraft) < AIRCRAFT_TYPES.len(),
+                "A5: {id} has no aircraft type"
+            );
+            let needs_m = aircraft(flight.aircraft).runway_m;
+            assert!(
+                self.config.runways.iter().any(|r| r.length_m >= needs_m),
+                "A5: {id} can never move"
+            );
+        }
+        seqs.sort_unstable();
+        assert!(
+            seqs.windows(2).all(|w| w[0] < w[1]),
+            "A3: a seq is used twice"
+        );
+
+        // A2, A4
+        let mut counts = [0u64; 4];
+        for status in self.flights.values() {
+            let i = match status {
+                FlightStatus::Queued(_) => 0,
+                FlightStatus::Landed => 1,
+                FlightStatus::Departed => 2,
+                FlightStatus::Diverted => 3,
+            };
+            counts[i] += 1;
+        }
+        let stats = self.stats;
+        assert_eq!(counts[0], self.queue.len() as u64, "A2: queued count");
+        assert_eq!(
+            counts,
+            [
+                self.queue.len() as u64,
+                stats.landed,
+                stats.departed,
+                stats.diverted
+            ],
+            "A4: statuses do not match the stats"
+        );
+        assert_eq!(stats.accepted, self.flights.len() as u64, "A4: accepted");
+
+        // A6
+        assert!(self.wind.direction_deg < 360, "A6: wind {:?}", self.wind);
+
+        // A7: the active set is legal.
+        let mut candidates: u16 = 0;
+        let mut active: u16 = 0;
+        for r in 0..count {
+            let config = &self.config.runways[r];
+            let within = components(self.wind, config.heading_deg).crosswind_e4
+                <= u64::from(config.crosswind_limit_kt) * 10_000;
+            let open = self.runways[r].closures.is_empty();
+            if open && within {
+                candidates |= 1 << r;
+            }
+            if self.runways[r].active {
+                active |= 1 << r;
+                assert!(open, "A7: closed runway {r} in use");
+                assert!(within, "A7: runway {r} in use beyond its crosswind limit");
+                assert_eq!(
+                    self.crossing[r] & active & !(1 << r),
+                    0,
+                    "A7: crossing runways in use"
+                );
+            }
+        }
+        if candidates != 0 {
+            let longest = (0..count)
+                .filter(|r| candidates & (1 << r) != 0)
+                .map(|r| self.config.runways[r].length_m)
+                .max();
+            assert!(
+                (0..count)
+                    .any(|r| active & (1 << r) != 0
+                        && Some(self.config.runways[r].length_m) == longest),
+                "A7: no longest candidate in use"
+            );
+        }
+
+        self.check_clock_rules();
+    }
+
+    /// The part of [`Airport::check_invariants`] that the passing of time
+    /// alone could break (A8, A10, A12).
+    fn check_clock_rules(&self) {
+        // A8
+        for (r, runway) in self.runways.iter().enumerate() {
+            for last in [runway.last_arrival, runway.last_departure]
+                .into_iter()
+                .flatten()
+            {
+                assert!(
+                    last.at_ms <= self.now_ms,
+                    "A8: runway {r} used in the future"
+                );
+            }
+        }
+
+        // A10: nobody still waiting who should have diverted. Ordinary
+        // flights sort last.
+        if let Some(hold) = self.config.max_arrival_hold_ms {
+            let first_normal = QueueKey {
+                priority: PRIORITY_NORMAL,
+                ready_ms: 0,
+                seq: 0,
+            };
+            for flight in self.queue.range(first_normal..).map(|(_, f)| f) {
+                if flight.kind == Kind::Arrival {
+                    assert!(
+                        flight.ready_ms + hold > self.now_ms,
+                        "A10: {} overdue but still queued",
+                        flight.id
+                    );
+                }
+            }
+        }
+
+        // A12
+        assert!(self.now_ms <= MAX_TIME_MS, "A12: clock past the cap");
+    }
+
+    /// Checks what one `apply` may change (A11, A13).
+    #[cfg(any(debug_assertions, feature = "paranoid"))]
+    fn check_apply(&self, before: &Before, command: &Command, out: &[Output]) {
+        // A11
+        assert!(self.now_ms >= before.now_ms, "A11: clock went back");
+        if !matches!(command, Command::AdvanceTime { .. }) {
+            assert_eq!(
+                self.now_ms, before.now_ms,
+                "A11: clock moved without AdvanceTime"
+            );
+        }
+        assert!(self.next_seq >= before.next_seq, "A11: next_seq fell");
+        let (a, b) = (self.stats, before.stats);
+        assert!(
+            a.accepted >= b.accepted
+                && a.landed >= b.landed
+                && a.departed >= b.departed
+                && a.diverted >= b.diverted
+                && a.rejected >= b.rejected
+                && a.arrival_delay_ms >= b.arrival_delay_ms
+                && a.departure_delay_ms >= b.departure_delay_ms,
+            "A11: a counter fell"
+        );
+        for (r, until) in before.inspection_until_ms.iter().enumerate() {
+            assert!(
+                self.runways[r].inspection_until_ms >= *until,
+                "A11: inspection on runway {r} cut short"
+            );
+        }
+        // A13
+        for output in out {
+            let at_ms = match output {
+                Output::Landed {
+                    at_ms, vacated_ms, ..
+                }
+                | Output::Departed {
+                    at_ms, vacated_ms, ..
+                } => {
+                    assert!(vacated_ms > at_ms, "A13: {output:?}");
+                    assert!(
+                        *at_ms >= before.now_ms,
+                        "A13: decided in the past: {output:?}"
+                    );
+                    *at_ms
+                }
+                Output::Accepted { at_ms, .. }
+                | Output::Rejected { at_ms, .. }
+                | Output::Diverted { at_ms, .. }
+                | Output::EmergencyDeclared { at_ms, .. }
+                | Output::RunwayClosed { at_ms, .. }
+                | Output::RunwayOpened { at_ms, .. }
+                | Output::ActiveRunways { at_ms, .. }
+                | Output::WindChanged { at_ms, .. }
+                | Output::GroundStopStarted { at_ms, .. }
+                | Output::GroundStopLifted { at_ms, .. } => *at_ms,
+                Output::RunwayInspection { from_ms, .. } => *from_ms,
+            };
+            if !matches!(output, Output::RunwayInspection { .. }) {
+                assert!(
+                    at_ms <= self.now_ms,
+                    "A13: output in the future: {output:?}"
+                );
+            }
         }
     }
 }

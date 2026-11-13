@@ -1,6 +1,6 @@
 //! The [`EventQueue`] holds events ordered by time, then by the order they were added.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use det::Ms;
 
@@ -9,24 +9,28 @@ use det::Ms;
 pub struct Seq(u64);
 
 impl Seq {
+    /// The `Seq` after this one.
+    ///
+    /// # Panics
+    /// If the counter overflows (Q5).
+    #[must_use]
     pub fn next(&self) -> Self {
-        Self(self.0 + 1)
+        Self(self.0.checked_add(1).expect("EventQueue: Seq overflow"))
     }
 }
 
 /// Events ordered by time, then by the order they were added.
 ///
-/// The tie rule is part of the key, note a side effect of the container.
+/// The tie rule is part of the key, not a side effect of the container.
 #[derive(Debug)]
 pub struct EventQueue<E> {
     /// A tree of events, sorted by time and then [`Seq`].
     events: BTreeMap<(Ms, Seq), E>,
-    /// A set of the sequences in `events`.
-    seqs: BTreeSet<Seq>,
-    /// The next [`Seq`] to use.
+    /// The next [`Seq`] to use. Only ever counts up, so every key is unique.
     next_seq: Seq,
-    /// The time of the last `pop`.
-    floor: Option<Ms>,
+    /// The key of the last `pop`. Nothing may be pushed before its time, and
+    /// popped keys are strictly increasing.
+    floor: Option<(Ms, Seq)>,
 }
 
 impl<E> Default for EventQueue<E> {
@@ -36,20 +40,11 @@ impl<E> Default for EventQueue<E> {
 }
 
 impl<E> EventQueue<E> {
-    fn max_seq(&self) -> Seq {
-        if let Some(seq) = self.seqs.last() {
-            *seq
-        } else {
-            Seq::default()
-        }
-    }
-
     /// An empty queue.
     #[must_use]
     pub fn new() -> Self {
         Self {
             events: BTreeMap::new(),
-            seqs: BTreeSet::new(),
             next_seq: Seq(0),
             floor: None,
         }
@@ -59,21 +54,25 @@ impl<E> EventQueue<E> {
     ///
     /// # Arguments:
     ///
-    /// * `at` - the timestamp of the insert.
+    /// * `at` - the time the event is due.
     /// * `event` - the event to be inserted.
     ///
     /// # Panics
     ///
-    /// If the next [`Seq`] is not greater than the biggest [`Seq`] in the queue, this is a bug.
+    /// If `at` is before the time of the last `pop` (nothing may be scheduled in the past), or
+    /// the key is already present. Both are bugs.
     pub fn push(&mut self, at: Ms, event: E) -> Seq {
+        if let Some((floor, _)) = self.floor {
+            assert!(
+                at >= floor,
+                "EventQueue: event pushed at {at} ms, before the last pop at {floor} ms"
+            );
+        }
         let s = self.next_seq;
         assert!(
-            s > self.max_seq(),
-            "EventQueue: Next `seq` is not greater than largest `seq` in queue"
+            self.events.insert((at, s), event).is_none(),
+            "EventQueue: key ({at}, {s:?}) pushed twice"
         );
-
-        self.events.insert((at, s), event);
-        self.seqs.insert(s);
         self.next_seq = s.next();
         s
     }
@@ -81,32 +80,78 @@ impl<E> EventQueue<E> {
     /// Peek at the key of the first event in the queue
     #[must_use]
     pub fn peek(&self) -> Option<(Ms, Seq)> {
-        if let Some(((at, seq), _)) = self.events.first_key_value() {
-            Some((*at, *seq))
-        } else {
-            None
-        }
+        self.events.first_key_value().map(|(key, _)| *key)
     }
 
     /// Remove and return the earliest event.
     ///
     /// # Panics
-    /// If peek has found a key, and pop subsequently fails to, there is a bug in the program as
-    /// peek and pop should always return the same thing.
+    /// If the popped key is not after the previous one. Keys only grow, and nothing is pushed
+    /// before the last pop, so this is a bug.
     pub fn pop(&mut self) -> Option<(Ms, E)> {
-        let peeked = self.peek();
-        match peeked {
-            Some((at, seq)) => {
-                let popped = self.events.pop_first();
-                assert!(popped.is_some());
-
-                let ((at_pop, seq_pop), event) = popped.unwrap();
-                assert_eq!(at, at_pop);
-                assert_eq!(seq, seq_pop);
-
-                Some((at, event))
-            }
-            None => None,
+        let ((at, seq), event) = self.events.pop_first()?;
+        if let Some(floor) = self.floor {
+            assert!(
+                (at, seq) > floor,
+                "EventQueue: popped ({at}, {seq:?}) after {floor:?}"
+            );
         }
+        self.floor = Some((at, seq));
+        Some((at, event))
+    }
+
+    /// Number of events waiting.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    /// Whether no event is waiting.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_push_works() {
+        let mut q = EventQueue::new();
+        assert_eq!(q.push(Ms(5), 'a'), Seq(0));
+        assert_eq!(q.pop(), Some((Ms(5), 'a')));
+        assert_eq!(q.pop(), None);
+    }
+
+    #[test]
+    fn ties_go_in_push_order() {
+        let mut q = EventQueue::new();
+        q.push(Ms(10), 'b');
+        q.push(Ms(5), 'a');
+        q.push(Ms(10), 'c');
+        assert_eq!(q.peek(), Some((Ms(5), Seq(1))));
+        let order: Vec<char> = std::iter::from_fn(|| q.pop().map(|(_, e)| e)).collect();
+        assert_eq!(order, ['a', 'b', 'c']);
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn pushing_at_the_last_pop_time_is_allowed() {
+        let mut q = EventQueue::new();
+        q.push(Ms(5), 'a');
+        q.pop();
+        q.push(Ms(5), 'b');
+        assert_eq!(q.pop(), Some((Ms(5), 'b')));
+    }
+
+    #[test]
+    #[should_panic(expected = "before the last pop")]
+    fn nothing_is_scheduled_in_the_past() {
+        let mut q = EventQueue::new();
+        q.push(Ms(5), 'a');
+        q.pop();
+        q.push(Ms(4), 'b');
     }
 }

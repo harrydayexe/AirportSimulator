@@ -29,6 +29,9 @@ pub fn gap_ms(distance_nm: u32, speed_kt: u32) -> Option<Ms> {
 ///   its final approach and the gap opens up from there. The follower needs
 ///   the time to fly the approach plus the separation, less the time the
 ///   leader took to fly the approach.
+///
+/// # Panics
+/// If either approach speed is zero (`data.rs` checks this at build time).
 #[must_use]
 pub fn approach_gap_ms(
     leader: &AircraftType,
@@ -39,12 +42,21 @@ pub fn approach_gap_ms(
     let path = u64::from(final_approach_nm);
     let vl = u64::from(leader.approach_speed_kt);
     let vf = u64::from(follower.approach_speed_kt);
-    if vf >= vl {
-        (sep * MS_PER_HOUR).div_ceil(vf)
+    // P-S1: also a build-time check on the table in `data.rs`.
+    assert!(vl > 0 && vf > 0, "approach speed of zero");
+    let plain = (sep * MS_PER_HOUR).div_ceil(vf);
+    let gap = if vf >= vl {
+        plain
     } else {
         // (path + sep) / vf - path / vl, over a common denominator.
         (((path + sep) * vl - path * vf) * MS_PER_HOUR).div_ceil(vf * vl)
-    }
+    };
+    // P-S2: a slow follower never gets a shorter gap than the plain one.
+    assert!(
+        gap >= plain && gap > 0,
+        "approach gap {gap} ms below the plain {plain} ms"
+    );
+    gap
 }
 
 #[cfg(test)]

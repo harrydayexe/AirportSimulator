@@ -76,6 +76,10 @@ const AIRLINES: [&str; 10] = [
 /// Generates flight requests. Each flight asks for a uniformly random time
 /// in the window, which makes the arrivals of each kind a Poisson stream.
 /// The same parameters always give the same list, ordered by filing time.
+///
+/// # Panics
+/// If flights are to be generated but the mix has no weight (T1), or if the
+/// result is out of order or reuses an identifier (T3).
 #[must_use]
 pub fn generate(params: &TrafficParams) -> Vec<Timed> {
     let mut rng = Rng::new(params.seed);
@@ -87,6 +91,12 @@ pub fn generate(params: &TrafficParams) -> Vec<Timed> {
         (false, params.departures_per_hour),
     ] {
         let count = (u64::from(per_hour) * params.duration_ms + MS_PER_HOUR / 2) / MS_PER_HOUR;
+        if count > 0 {
+            assert!(
+                total_weight > 0 && params.duration_ms > 0,
+                "traffic: {count} flights to generate from an empty mix or window"
+            );
+        }
         for _ in 0..count {
             let earliest_ms = params.start_ms + rng.below(params.duration_ms);
             let aircraft = pick(&params.mix, rng.below(total_weight));
@@ -117,9 +127,32 @@ pub fn generate(params: &TrafficParams) -> Vec<Timed> {
         }
     }
     flights.sort_by_key(|timed| timed.at_ms);
+
+    // T3: in filing order, filed no later than the time asked for, and every
+    // identifier used once.
+    let mut ids = std::collections::BTreeSet::new();
+    for timed in &flights {
+        let (Command::RequestLanding {
+            flight,
+            earliest_ms,
+            ..
+        }
+        | Command::RequestDeparture {
+            flight,
+            earliest_ms,
+            ..
+        }) = &timed.command
+        else {
+            unreachable!("traffic only generates requests");
+        };
+        assert!(timed.at_ms <= *earliest_ms, "traffic: {flight} filed late");
+        assert!(ids.insert(flight), "traffic: {flight} generated twice");
+    }
+    assert!(flights.is_sorted_by_key(|timed| timed.at_ms));
     flights
 }
 
+/// The type `roll` lands on, with each type covering `weight` values.
 fn pick(mix: &[(String, u32)], mut roll: u64) -> String {
     for (icao, weight) in mix {
         let weight = u64::from(*weight);
@@ -128,8 +161,8 @@ fn pick(mix: &[(String, u32)], mut roll: u64) -> String {
         }
         roll -= weight;
     }
-    // Only reached with an empty mix.
-    "A320".to_owned()
+    // T2: `generate` rolls below the total weight and checks it is not zero.
+    unreachable!("traffic: roll beyond the total weight of the mix")
 }
 
 #[cfg(test)]

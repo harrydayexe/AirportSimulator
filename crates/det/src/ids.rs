@@ -71,7 +71,7 @@ impl From<Ms> for u64 {
 
 impl Add for Ms {
     fn add(self, rhs: Self) -> Self::Output {
-        Ms(self.0 + rhs.0)
+        Ms(self.0.checked_add(rhs.0).expect("simulated time overflow"))
     }
 
     type Output = Ms;

@@ -6,7 +6,6 @@ use crate::{Index, NodeId, Term};
 
 /// What a log entry carries.
 #[derive(Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum Payload<C> {
     /// An empty entry a new leader adds in its own term so that entries left
     /// from earlier terms can be committed. Skipped when applying.
@@ -17,7 +16,6 @@ pub enum Payload<C> {
 
 /// One position in the log.
 #[derive(Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub struct Entry<C> {
     /// The election term of the leader that added the entry.
     pub term: Term,
@@ -27,7 +25,6 @@ pub struct Entry<C> {
 
 /// Everything that survives a crash. Nothing else does.
 #[derive(Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub struct Durable<C> {
     /// The latest election term the node has seen; 0 for a brand new node.
     pub term: Term,
@@ -37,6 +34,8 @@ pub struct Durable<C> {
     pub log: Vec<Entry<C>>,
 }
 impl<C> Durable<C> {
+    /// What a node keeps across a crash.
+    #[must_use]
     pub fn new(term: Term, voted_for: Option<NodeId>, log: Vec<Entry<C>>) -> Self {
         Self {
             term,
@@ -44,11 +43,58 @@ impl<C> Durable<C> {
             log,
         }
     }
+
+    /// Checks the shape a node's durable state always has (O1, O2). Which
+    /// node `voted_for` may name is the node's own check (O3).
+    ///
+    /// # Panics
+    /// If the log breaks [`assert_log_shape`], or a node that has never seen
+    /// an election (term 0) has a vote or a log.
+    pub fn assert_valid(&self) {
+        assert_log_shape(&self.log, self.term);
+        if self.term == Term(0) {
+            assert!(
+                self.voted_for.is_none(),
+                "Durable: term 0 with a vote for {:?}",
+                self.voted_for
+            );
+            assert!(
+                self.log.is_empty(),
+                "Durable: term 0 with {} log entries",
+                self.log.len()
+            );
+        }
+    }
+}
+
+/// Checks a log is one a node could have built by `term` (O1, N8): every
+/// entry is from term 1 or later, terms never fall along the log, and none is
+/// later than `term`.
+///
+/// # Panics
+/// If any of those fails, naming the first position that breaks it.
+pub fn assert_log_shape<C>(log: &[Entry<C>], term: Term) {
+    let mut previous = Term(1);
+    for (i, entry) in log.iter().enumerate() {
+        let position = i + 1;
+        assert!(
+            entry.term >= previous,
+            "log: entry {position} has term {} after term {previous}",
+            entry.term
+        );
+        previous = entry.term;
+    }
+    if let Some(last) = log.last() {
+        assert!(
+            last.term <= term,
+            "log: last entry has term {} beyond the node's term {term}",
+            last.term
+        );
+    }
 }
 
 /// Something the host hands to a node.
 #[derive(Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum Input<C> {
     /// A time you asked to be woken at has passed. May arrive early or late,
     /// so the node checks the time itself.
@@ -65,9 +111,8 @@ pub enum Input<C> {
 }
 
 /// Something a node asks the host to do.
-/// TODO: Add EffectBuilder which can build the effect by doing .to, .from etc
+/// TODO: Add `EffectBuilder` which can build the effect by doing `.to`, `.from` etc
 #[derive(Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum Effect<C> {
     /// Deliver a message to another node.
     Send {
@@ -105,7 +150,6 @@ pub enum Role {
 /// A message between nodes. A placeholder until the election and log-copying
 /// messages are added.
 #[derive(Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub struct Message<C> {
     /// The term number of the sender.
     pub term: Term,
@@ -115,14 +159,45 @@ pub struct Message<C> {
 
 impl<C> Message<C> {
     /// Create a new [`Message`].
+    #[must_use]
     pub fn new(term: Term, command: MessageCommand<C>) -> Self {
         Self { term, command }
+    }
+
+    /// Checks the shape every message has, whoever sent it (O4, O5). Every
+    /// node runs this code, so a malformed message is a bug in the sender.
+    ///
+    /// # Panics
+    /// If the term is 0, or an `AppendEntries` has `prev_index` and
+    /// `prev_term` disagreeing about the start of the log, or entries whose
+    /// terms fall, start before `prev_term` or end after the message's term.
+    pub fn assert_valid(&self) {
+        assert!(self.term >= Term(1), "message carries term 0");
+        if let MessageCommand::AppendEntries {
+            prev_index,
+            prev_term,
+            entries,
+        } = &self.command
+        {
+            assert_eq!(
+                *prev_index == Index(0),
+                *prev_term == Term(0),
+                "AppendEntries: prev_index {prev_index} with prev_term {prev_term}"
+            );
+            if let Some(first) = entries.first() {
+                assert!(
+                    first.term >= *prev_term,
+                    "AppendEntries: first entry term {} before prev_term {prev_term}",
+                    first.term
+                );
+            }
+            assert_log_shape(entries, self.term);
+        }
     }
 }
 
 /// The type of message sent between two nodes.
 #[derive(Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum MessageCommand<C> {
     /// Requesting a vote for leader.
     /// Should grant if we have voted for them last, or not voted for anyone.
@@ -132,12 +207,13 @@ pub enum MessageCommand<C> {
     VoteReply,
     /// Append the new entries, if checks match.
     AppendEntries {
-        /// The index of the entry just before these new ones.
-        prev_index: usize,
-        /// The term of the previous entry before these new ones.
-        prev_term: C,
+        /// The index of the entry just before these new ones; 0 when they
+        /// start the log.
+        prev_index: Index,
+        /// The term of the entry at `prev_index`; 0 when they start the log.
+        prev_term: Term,
         /// The list of entries from the leader.
-        entries: Vec<C>,
+        entries: Vec<Entry<C>>,
     },
     /// Reply from a follower to a leader after appending messages to it's log
     AppendReply {
@@ -145,25 +221,17 @@ pub enum MessageCommand<C> {
         success: bool,
         /// On success, how far its log is known to match the leader's, i.e. the position of the
         /// last entry the message covered.
-        last_match_index: usize,
+        last_match_index: Index,
     },
 }
 
 impl<C> MessageCommand<C> {
     /// Returns whether the message command is a request or not.
+    #[must_use]
     pub fn is_request(&self) -> bool {
         match self {
-            MessageCommand::RequestVote
-            | MessageCommand::AppendEntries {
-                prev_index: _,
-                prev_term: _,
-                entries: _,
-            } => true,
-            MessageCommand::VoteReply
-            | MessageCommand::AppendReply {
-                success: _,
-                last_match_index: _,
-            } => false,
+            MessageCommand::RequestVote | MessageCommand::AppendEntries { .. } => true,
+            MessageCommand::VoteReply | MessageCommand::AppendReply { .. } => false,
         }
     }
 }
@@ -171,7 +239,6 @@ impl<C> MessageCommand<C> {
 /// A node's role, term and positions, for checkers and the web view. A
 /// placeholder until those are filled in.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-#[non_exhaustive]
 pub enum Status {
     /// Placeholder value.
     Healthy,

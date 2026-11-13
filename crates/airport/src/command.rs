@@ -41,12 +41,14 @@ pub enum Emergency {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
     /// "The simulated time is now X." Time never goes backwards: an earlier
-    /// time is ignored.
+    /// time is ignored. A time past
+    /// [`MAX_TIME_MS`](crate::data::MAX_TIME_MS) is rejected.
     AdvanceTime {
         /// The new simulated time.
         now_ms: Ms,
     },
-    /// A flight wants to land, no earlier than `earliest_ms`.
+    /// A flight wants to land, no earlier than `earliest_ms`, which may be at
+    /// most [`MAX_FILING_AHEAD_MS`](crate::data::MAX_FILING_AHEAD_MS) ahead.
     RequestLanding {
         /// The flight identifier; must not have been used before.
         flight: String,
@@ -55,7 +57,9 @@ pub enum Command {
         /// The earliest time the flight can be at the runway.
         earliest_ms: Ms,
     },
-    /// A flight wants to take off, no earlier than `earliest_ms`.
+    /// A flight wants to take off, no earlier than `earliest_ms`, which may
+    /// be at most [`MAX_FILING_AHEAD_MS`](crate::data::MAX_FILING_AHEAD_MS)
+    /// ahead.
     RequestDeparture {
         /// The flight identifier; must not have been used before.
         flight: String,
@@ -123,6 +127,10 @@ pub enum RejectReason {
     UnknownRunway,
     /// The wind direction is above 360 degrees.
     InvalidWind,
+    /// The time is past [`MAX_TIME_MS`](crate::data::MAX_TIME_MS), or a
+    /// request asks for a slot more than
+    /// [`MAX_FILING_AHEAD_MS`](crate::data::MAX_FILING_AHEAD_MS) ahead.
+    InvalidTime,
 }
 
 /// Why an arrival diverted.

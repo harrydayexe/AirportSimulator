@@ -4,10 +4,18 @@ import { type DemoOptions, type DemoRun, loadSim, runDemo } from "./sim";
 import { TimelineView } from "./RunwayView";
 import { buildTimeline, clock } from "./timeline";
 
-const DEFAULTS: DemoOptions = { seed: 1, hours: 6, arrivalsPerHour: 40, departuresPerHour: 40 };
+const DEFAULTS: DemoOptions = { seed: 1n, hours: 6, arrivalsPerHour: 40, departuresPerHour: 40 };
+const MAX_SEED = 2n ** 64n - 1n;
 
-const FIELDS: { key: keyof DemoOptions; label: string; min: number; max: number }[] = [
-  { key: "seed", label: "Seed", min: 0, max: 4_294_967_295 },
+/** The seed typed in, or `undefined` if it is not a whole number from 0 to 2^64 - 1. */
+function parseSeed(text: string): bigint | undefined {
+  if (!/^\d{1,20}$/.test(text)) return undefined;
+  const seed = BigInt(text);
+  return seed <= MAX_SEED ? seed : undefined;
+}
+
+type NumberField = Exclude<keyof DemoOptions, "seed">;
+const FIELDS: { key: NumberField; label: string; min: number; max: number }[] = [
   { key: "hours", label: "Hours of traffic", min: 1, max: 24 },
   { key: "arrivalsPerHour", label: "Arrivals an hour", min: 0, max: 120 },
   { key: "departuresPerHour", label: "Departures an hour", min: 0, max: 120 },
@@ -17,6 +25,8 @@ function App() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [form, setForm] = useState(DEFAULTS);
+  const [seedText, setSeedText] = useState(String(DEFAULTS.seed));
+  const seed = parseSeed(seedText);
   const [run, setRun] = useState<DemoRun | undefined>();
 
   const start = (options: DemoOptions) => {
@@ -55,9 +65,22 @@ function App() {
         className="controls"
         onSubmit={(e) => {
           e.preventDefault();
-          start(form);
+          if (seed !== undefined) start({ ...form, seed });
         }}
       >
+        <label>
+          Seed
+          <input
+            type="text"
+            inputMode="numeric"
+            pattern="\d{1,20}"
+            required
+            aria-invalid={seed === undefined}
+            title="A whole number from 0 to 18446744073709551615"
+            value={seedText}
+            onChange={(e) => setSeedText(e.target.value.trim())}
+          />
+        </label>
         {FIELDS.map(({ key, label, min, max }) => (
           <label key={key}>
             {label}
@@ -71,7 +94,7 @@ function App() {
             />
           </label>
         ))}
-        <button type="submit" disabled={!ready}>
+        <button type="submit" disabled={!ready || seed === undefined}>
           Run
         </button>
       </form>

@@ -962,3 +962,39 @@ fn the_demo_shows_a_little_of_everything() {
         stats.landed + stats.departed + stats.diverted
     );
 }
+
+#[test]
+fn times_past_the_cap_are_rejected() {
+    use airport::data::{MAX_FILING_AHEAD_MS, MAX_TIME_MS};
+    let rejected = |a: &mut Airport, command: Command| match &a.apply(&command)[..] {
+        [Output::Rejected { reason, .. }] => *reason,
+        other => panic!("expected a rejection, got {other:?}"),
+    };
+    // Default demo airport: arrivals hold at most 45 minutes, so a request
+    // at u64::MAX used to overflow `ready_ms + hold` on the next tick.
+    let mut a = demo();
+    assert_eq!(
+        rejected(&mut a, land("A", "A320", u64::MAX)),
+        RejectReason::InvalidTime
+    );
+    // 120 hours ahead is the most a flight plan may be filed in advance.
+    assert!(matches!(
+        a.apply(&land("B", "A320", MAX_FILING_AHEAD_MS))[..],
+        [Output::Accepted { .. }]
+    ));
+    assert_eq!(
+        rejected(&mut a, depart("C", "A320", MAX_FILING_AHEAD_MS + 1)),
+        RejectReason::InvalidTime
+    );
+    // The clock itself stops at about 100 years.
+    assert_eq!(
+        rejected(&mut a, Command::AdvanceTime { now_ms: u64::MAX }),
+        RejectReason::InvalidTime
+    );
+    assert_eq!(a.now_ms(), 0);
+    a.apply(&Command::AdvanceTime {
+        now_ms: MAX_TIME_MS,
+    });
+    assert_eq!(a.now_ms(), MAX_TIME_MS);
+    a.check_invariants();
+}

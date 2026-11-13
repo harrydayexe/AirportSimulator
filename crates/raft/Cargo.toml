@@ -12,3 +12,8 @@ det.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+# Whole-state invariant scans after every step, also in release builds
+# (they always run in debug builds and tests).
+paranoid = []

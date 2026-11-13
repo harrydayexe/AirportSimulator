@@ -48,6 +48,9 @@ impl Default for DemoOptions {
 }
 
 /// The demonstration scenario (see [`scenario::demo`]) as JSON.
+///
+/// # Panics
+/// Never: a [`Scenario`] always serialises.
 #[must_use]
 pub fn demo_scenario_json(options: DemoOptions) -> String {
     let scenario = scenario::demo(
@@ -56,7 +59,7 @@ pub fn demo_scenario_json(options: DemoOptions) -> String {
         options.arrivals_per_hour,
         options.departures_per_hour,
     );
-    serde_json::to_string(&scenario).unwrap_or_default()
+    serde_json::to_string(&scenario).expect("a Scenario always serialises")
 }
 
 /// Runs a scenario.

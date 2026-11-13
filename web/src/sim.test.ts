@@ -21,10 +21,12 @@ function native(args: string[], stdin?: string): string {
 
 // Run-it-twice, across the two builds: the browser's WebAssembly and the
 // native program must agree on every output and on the final fingerprint.
-test.each([1, 7, 123456])(
-  "WebAssembly and native agree for seed %i",
+// The last seed is above 2^32 and the largest `u64`: seeds printed by a bulk
+// native run must replay in the browser.
+test.each(["1", "7", "123456", "18446744073709551615"])(
+  "WebAssembly and native agree for seed %s",
   (seed) => {
-    const scenario = demoScenario(seed, 4, 45, 40);
+    const scenario = demoScenario(BigInt(seed), 4, 45, 40);
     expect(native(["gen", "--seed", String(seed), "--hours", "4", "--arrivals", "45", "--departures", "40"])).toBe(
       scenario,
     );
@@ -43,7 +45,7 @@ test("runScenario reports a bad scenario", () => {
 });
 
 test("the timeline accounts for every movement and closure", () => {
-  const scenario = demoScenario(2, 6, 40, 40);
+  const scenario = demoScenario(2n, 6, 40, 40);
   const airport = (JSON.parse(scenario) as { airport: AirportConfig }).airport;
   const result = JSON.parse(runScenario(scenario)) as RunResult;
   const timeline = buildTimeline(airport, result);

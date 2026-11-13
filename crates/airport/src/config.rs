@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::Ms;
 use crate::data::{
     DEFAULT_CROSSWIND_LIMIT_KT, DEFAULT_FINAL_APPROACH_NM, DEFAULT_MAX_ARRIVAL_HOLD_MS,
-    DEFAULT_MAYDAY_INSPECTION_MS,
+    DEFAULT_MAYDAY_INSPECTION_MS, MAX_ARRIVAL_HOLD_MS, MAX_EXIT_EXTRA_MS, MAX_FINAL_APPROACH_NM,
+    MAX_MAYDAY_INSPECTION_MS,
 };
 
 /// Most runways one airport may have. Keeps the search for the best set of
@@ -122,6 +123,11 @@ pub enum ConfigError {
     UnknownCrossing(String),
     /// A crossing pairs this runway with itself.
     SelfCrossing(String),
+    /// A runway end name is empty or contains `/`, which would make runway
+    /// names ambiguous.
+    BadRunwayName(String),
+    /// This field is above its limit in `data.rs`.
+    OutOfRange(&'static str),
 }
 
 impl fmt::Display for ConfigError {
@@ -133,6 +139,10 @@ impl fmt::Display for ConfigError {
             Self::BadHeading(n) => write!(f, "runway {n} has a heading of 360 or more"),
             Self::UnknownCrossing(n) => write!(f, "crossing names unknown runway {n}"),
             Self::SelfCrossing(n) => write!(f, "runway {n} cannot cross itself"),
+            Self::BadRunwayName(n) => {
+                write!(f, "runway end name {n:?} is empty or contains '/'")
+            }
+            Self::OutOfRange(field) => write!(f, "{field} is above its limit"),
         }
     }
 }
@@ -192,6 +202,10 @@ impl AirportConfig {
     ///
     /// # Errors
     /// Returns the first problem found with the configuration.
+    ///
+    /// # Panics
+    /// Never, unless the masks it builds are not symmetric or name a runway
+    /// that does not exist, which would be a bug here.
     pub fn validate(&self) -> Result<Vec<u16>, ConfigError> {
         if self.runways.is_empty() {
             return Err(ConfigError::NoRunways);
@@ -199,12 +213,36 @@ impl AirportConfig {
         if self.runways.len() > MAX_RUNWAYS {
             return Err(ConfigError::TooManyRunways);
         }
+        let within = |ok: bool, field: &'static str| {
+            if ok {
+                Ok(())
+            } else {
+                Err(ConfigError::OutOfRange(field))
+            }
+        };
+        within(
+            self.final_approach_nm <= MAX_FINAL_APPROACH_NM,
+            "final_approach_nm",
+        )?;
+        within(
+            self.mayday_inspection_ms <= MAX_MAYDAY_INSPECTION_MS,
+            "mayday_inspection_ms",
+        )?;
+        within(
+            self.max_arrival_hold_ms
+                .is_none_or(|hold| hold <= MAX_ARRIVAL_HOLD_MS),
+            "max_arrival_hold_ms",
+        )?;
         let mut names = BTreeSet::new();
         for runway in &self.runways {
             if runway.heading_deg >= 360 {
                 return Err(ConfigError::BadHeading(runway.name()));
             }
+            within(runway.exit_extra_ms <= MAX_EXIT_EXTRA_MS, "exit_extra_ms")?;
             for end in [&runway.low, &runway.high] {
+                if end.is_empty() || end.contains('/') {
+                    return Err(ConfigError::BadRunwayName(end.clone()));
+                }
                 if !names.insert(end.as_str()) {
                     return Err(ConfigError::DuplicateRunwayName(end.clone()));
                 }
@@ -223,6 +261,17 @@ impl AirportConfig {
             }
             masks[ia] |= 1 << ib;
             masks[ib] |= 1 << ia;
+        }
+        // V1: one mask per runway, symmetric, never crossing itself or a
+        // runway that does not exist.
+        let count = masks.len();
+        assert_eq!(count, self.runways.len());
+        for (a, mask) in masks.iter().enumerate() {
+            assert_eq!(mask & (1 << a), 0, "runway {a} crosses itself");
+            assert_eq!(mask >> count, 0, "runway {a} crosses a missing runway");
+            for (b, other) in masks.iter().enumerate() {
+                assert_eq!(mask >> b & 1, other >> a & 1, "crossing {a}-{b} is one-way");
+            }
         }
         Ok(masks)
     }
@@ -268,6 +317,46 @@ mod tests {
         assert_eq!(
             AirportConfig::new("None", vec![]).validate(),
             Err(ConfigError::NoRunways)
+        );
+        let mut config = AirportConfig::demo();
+        config.runways[0].high = "09/27".into();
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::BadRunwayName("09/27".into()))
+        );
+        let mut config = AirportConfig::demo();
+        config.runways[1].low = String::new();
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::BadRunwayName(String::new()))
+        );
+    }
+
+    #[test]
+    fn times_and_distances_are_bounded() {
+        let mut config = AirportConfig::demo();
+        config.runways[1].exit_extra_ms = u64::MAX;
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::OutOfRange("exit_extra_ms"))
+        );
+        let mut config = AirportConfig::demo();
+        config.mayday_inspection_ms = u64::MAX;
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::OutOfRange("mayday_inspection_ms"))
+        );
+        let mut config = AirportConfig::demo();
+        config.max_arrival_hold_ms = Some(u64::MAX);
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::OutOfRange("max_arrival_hold_ms"))
+        );
+        let mut config = AirportConfig::demo();
+        config.final_approach_nm = u32::MAX;
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::OutOfRange("final_approach_nm"))
         );
     }
 

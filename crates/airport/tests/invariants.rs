@@ -438,6 +438,10 @@ fn run_and_check(seed: u64) {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the seed range is test configuration, not simulation input"
+)]
 fn no_rule_is_broken_by_random_commands() {
     // Set AIRPORT_SEEDS=first..last to try other seeds, e.g. 500..5000.
     let range = std::env::var("AIRPORT_SEEDS").ok().and_then(|v| {

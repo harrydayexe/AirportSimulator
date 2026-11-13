@@ -5,6 +5,9 @@ disallowed-methods = [
   { path = "std::thread::spawn", reason = "no threads: the host decides who runs next" },
   { path = "std::thread::sleep", reason = "no real waiting: the host owns time" },
   { path = "std::thread::Builder::spawn", reason = "no threads: the host decides who runs next" },
+  { path = "std::thread::current", reason = "no threads: the host decides who runs next" },
+  { path = "std::env::var", reason = "the environment differs per machine: pass settings in explicitly" },
+  { path = "std::env::var_os", reason = "the environment differs per machine: pass settings in explicitly" },
 ]
 disallowed-types = [
   { path = "std::collections::HashMap", reason = "iteration order varies per run: use BTreeMap" },
@@ -13,4 +16,11 @@ disallowed-types = [
   { path = "std::time::SystemTime", reason = "real clock: use simulated milliseconds" },
   { path = "std::sync::Mutex", reason = "no shared-memory concurrency" },
   { path = "std::sync::RwLock", reason = "no shared-memory concurrency" },
+  { path = "std::sync::atomic::AtomicBool", reason = "no shared-memory concurrency" },
+  { path = "std::sync::atomic::AtomicU32", reason = "no shared-memory concurrency" },
+  { path = "std::sync::atomic::AtomicU64", reason = "no shared-memory concurrency" },
+  { path = "std::sync::atomic::AtomicUsize", reason = "no shared-memory concurrency" },
+  { path = "std::sync::mpsc::Sender", reason = "no threads: the host decides who runs next" },
+  { path = "std::sync::mpsc::Receiver", reason = "no threads: the host decides who runs next" },
+  { path = "std::collections::hash_map::RandomState", reason = "seeded per process: use BTreeMap" },
 ]

@@ -3,6 +3,9 @@
 
 use std::hash::{Hash, Hasher};
 
+// `write_usize` widens to `u64`; that loses nothing only if a `usize` fits.
+const _: () = assert!(size_of::<usize>() <= 8);
+
 /// 64-bit FNV-1a, with every integer written as a fixed-width little-endian
 /// value so that a 32-bit browser and a 64-bit laptop agree.
 pub struct Fnv1a(u64);

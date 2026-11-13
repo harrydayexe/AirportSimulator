@@ -36,3 +36,6 @@ float_arithmetic = "deny"
 [profile.release]
 opt-level = "s"
 lto = true
+# Debug panics on integer overflow; without this, release (and so the browser) would
+# silently wrap instead, and the two builds would disagree.
+overflow-checks = true

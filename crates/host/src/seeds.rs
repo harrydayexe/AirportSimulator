@@ -7,7 +7,6 @@ use crate::hash::mix;
 /// What a generator is used for. Each purpose gets its own stream, so that changing one (say, the
 /// fault settings) does not shift the numbers another sees (say, the message delays).
 #[derive(Clone, Copy, Debug)]
-#[non_exhaustive]
 pub enum Stream {
     /// Message delays, loss and duplication.
     Network,
@@ -26,6 +25,20 @@ const TAG_NETWORK: u64 = 1;
 const TAG_FAULTS: u64 = 2;
 const TAG_NODE: u64 = 3;
 const TAG_CHILD: u64 = 4;
+
+// S1: two streams sharing a tag would share their numbers.
+const _: () = {
+    let tags = [TAG_NETWORK, TAG_FAULTS, TAG_NODE, TAG_CHILD];
+    let mut i = 0;
+    while i < tags.len() {
+        let mut j = i + 1;
+        while j < tags.len() {
+            assert!(tags[i] != tags[j], "seed stream tags must be distinct");
+            j += 1;
+        }
+        i += 1;
+    }
+};
 
 /// Gives every generator in a run, all from one number.
 #[derive(Clone, Copy, Debug)]
@@ -58,8 +71,17 @@ impl Seeds {
     }
 
     /// The seeds for child host `index`.
+    ///
+    /// # Panics
+    /// If the child's root equals this one's (S2), which would replay this
+    /// host's streams. Only a hash collision could cause it.
     #[must_use]
     pub fn child(&self, index: u32) -> Seeds {
-        Seeds::new(mix(mix(self.root, TAG_CHILD), u64::from(index)))
+        let root = mix(mix(self.root, TAG_CHILD), u64::from(index));
+        assert_ne!(
+            root, self.root,
+            "Seeds::child({index}) shares its parent's root"
+        );
+        Seeds::new(root)
     }
 }

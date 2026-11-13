@@ -10,6 +10,10 @@ pub struct Rng {
 
 impl Rng {
     /// A generator whose sequence is fixed by `seed`.
+    ///
+    /// # Panics
+    /// Never, unless the seeding code is broken and produces the all-zero
+    /// state, from which xoshiro never leaves.
     #[must_use]
     pub fn new(seed: u64) -> Self {
         let mut x = seed;
@@ -20,9 +24,11 @@ impl Rng {
             z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
             z ^ (z >> 31)
         };
-        Self {
-            s: [next(), next(), next(), next()],
-        }
+        let s = [next(), next(), next(), next()];
+        // The all-zero state is the one xoshiro never leaves. SplitMix64
+        // cannot produce it, so this is a check on the code above.
+        assert_ne!(s, [0; 4], "Rng::new: all-zero state from seed {seed}");
+        Self { s }
     }
 
     /// The next value in the sequence, uniform over all of `u64`.
@@ -39,6 +45,10 @@ impl Rng {
     }
 
     /// A uniform value in `0..n`, without bias. Returns 0 when `n` is 0.
+    ///
+    /// # Panics
+    /// Never, unless the method itself is broken and the result is not
+    /// below `n`.
     #[expect(
         clippy::cast_possible_truncation,
         reason = "Lemire's method compares the low 64 bits of the product"
@@ -53,7 +63,9 @@ impl Rng {
         loop {
             let m = u128::from(self.next_u64()) * u128::from(n);
             if (m as u64) >= threshold {
-                return (m >> 64) as u64;
+                let result = (m >> 64) as u64;
+                assert!(result < n, "Rng::below({n}) gave {result}");
+                return result;
             }
         }
     }
