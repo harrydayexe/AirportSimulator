@@ -97,4 +97,21 @@ mod tests {
         assert_eq!(fingerprint(&Term(5)), fingerprint(&5u64));
         assert_eq!(fingerprint(&NodeId(5)), fingerprint(&5u32));
     }
+
+    #[test]
+    fn ms_adds_and_displays() {
+        let sum = Ms(2) + Ms(3);
+        assert_eq!(sum, Ms(5));
+        assert_eq!(sum.to_string(), "5");
+        assert_eq!(u64::from(sum), 5);
+        assert_eq!(serde_json::to_string(&sum).unwrap(), "5");
+    }
+
+    /// Release builds keep overflow checks on, and this uses `checked_add`
+    /// anyway, so it panics in both (run `cargo test --release` to see).
+    #[test]
+    #[should_panic(expected = "simulated time overflow")]
+    fn ms_addition_panics_on_overflow() {
+        let _ = Ms(u64::MAX) + Ms(1);
+    }
 }

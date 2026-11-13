@@ -318,4 +318,88 @@ mod tests {
         assert_eq!(aircraft_index("ZZZZ"), None);
         assert_eq!(aircraft(aircraft_index("A388").unwrap()).wake, Super);
     }
+
+    const CLASSES: [WakeClass; 4] = [Light, Medium, Heavy, Super];
+
+    #[test]
+    fn every_pair_in_the_approach_table() {
+        // Doc 4444 with the 3 nm radar minimum applied, [leader][follower].
+        let expected = [
+            [3, 3, 3, 3], // behind a Light
+            [5, 3, 3, 3], // behind a Medium
+            [6, 5, 4, 3], // behind a Heavy
+            [8, 7, 6, 3], // behind a Super
+        ];
+        for (l, leader) in CLASSES.iter().enumerate() {
+            for (f, follower) in CLASSES.iter().enumerate() {
+                assert_eq!(
+                    approach_separation_nm(*leader, *follower),
+                    expected[l][f],
+                    "{follower:?} behind {leader:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_pair_in_the_departure_table() {
+        let expected = [
+            [60_000, 60_000, 60_000, 60_000],    // behind a Light
+            [120_000, 60_000, 60_000, 60_000],   // behind a Medium
+            [120_000, 120_000, 60_000, 60_000],  // behind a Heavy
+            [180_000, 180_000, 120_000, 60_000], // behind a Super
+        ];
+        for (l, leader) in CLASSES.iter().enumerate() {
+            for (f, follower) in CLASSES.iter().enumerate() {
+                assert_eq!(
+                    departure_separation_ms(*leader, *follower),
+                    expected[l][f],
+                    "{follower:?} behind {leader:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn occupancy_by_class() {
+        let arrival: Vec<Ms> = CLASSES.iter().map(|c| arrival_occupancy_ms(*c)).collect();
+        let departure: Vec<Ms> = CLASSES.iter().map(|c| departure_occupancy_ms(*c)).collect();
+        assert_eq!(arrival, [40_000, 50_000, 55_000, 60_000]);
+        assert_eq!(departure, [30_000, 40_000, 50_000, 55_000]);
+    }
+
+    #[test]
+    fn the_sine_table_is_right() {
+        assert_eq!(SIN_E4[30], 5_000);
+        assert_eq!(SIN_E4[45], 7_071);
+        assert_eq!(SIN_E4[60], 8_660);
+        assert!(SIN_E4.windows(2).all(|w| w[0] <= w[1]));
+        // sin² + cos² = 1, to within the rounding of two four-digit values
+        // (the largest error in the table is 11 286). Catches a mistyped
+        // entry.
+        for d in 0..=90 {
+            let a = u64::from(SIN_E4[d]);
+            let b = u64::from(SIN_E4[90 - d]);
+            let sum = a * a + b * b;
+            assert!(sum.abs_diff(100_000_000) <= 15_000, "{d} degrees: {sum}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "outside the table")]
+    fn an_unknown_aircraft_index_panics() {
+        let _ = aircraft(14);
+    }
+
+    #[test]
+    fn aircraft_codes_are_unique_and_the_default_mix_knows_them_all() {
+        let codes: std::collections::BTreeSet<&str> =
+            AIRCRAFT_TYPES.iter().map(|t| t.icao).collect();
+        assert_eq!(codes.len(), AIRCRAFT_TYPES.len());
+        let mix = crate::traffic::default_mix();
+        for (icao, _) in &mix {
+            assert!(aircraft_index(icao).is_some(), "{icao} is not in the table");
+        }
+        assert_eq!(mix.iter().map(|(_, w)| w).sum::<u32>(), 100);
+    }
 }

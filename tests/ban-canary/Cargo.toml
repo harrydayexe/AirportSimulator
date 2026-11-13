@@ -1,0 +1,12 @@
+# Uses one of each item the determinism ban forbids. `just check-ban` runs
+# clippy on it with the workspace's clippy.toml and lint levels, and passes
+# only if every item is reported. Not a workspace member: it never builds
+# with the rest.
+[package]
+name = "ban-canary"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Its own workspace, so cargo does not mistake it for a member of the root.
+[workspace]

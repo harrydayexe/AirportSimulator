@@ -15,6 +15,14 @@
 //!   back may still use the runway first, but only if doing so does not
 //!   delay the flight holding the claim.
 //!
+//! So the outcome depends on how often the clock ticks. With fine ticks a
+//! later flight can slip into a gap ahead of a claim that is still in the
+//! future; with one coarse step the claim's moment has already been reached
+//! when the queue is walked, so it is performed first and the later flight
+//! queues behind it. Every replica applies the same `AdvanceTime` commands,
+//! so this never splits replicas, but the tick is part of what defines a
+//! run.
+//!
 //! Because nothing is promised in advance, a closure, wind change or
 //! emergency can arrive at any point and simply changes what the next walk
 //! of the queue decides.
@@ -405,20 +413,26 @@ impl Airport {
         };
         // A17: `flights` and `queue` always agree (A2).
         let queued = self.queue.len();
+        let previous = self
+            .queue
+            .get(&key)
+            .unwrap_or_else(|| panic!("declare_emergency: {id} listed as queued but not in queue"))
+            .emergency;
+        // An emergency can be upgraded but not downgraded. A repeat or a
+        // downgrade changes nothing, not even the flight's place among its
+        // peers: a command that says nothing leaves no trace.
+        if previous.is_some_and(|current| kind <= current) {
+            return;
+        }
         let mut flight = self
             .queue
             .remove(&key)
-            .unwrap_or_else(|| panic!("declare_emergency: {id} listed as queued but not in queue"));
-        let previous = flight.emergency;
-        // An emergency can be upgraded but not downgraded.
-        let changed = flight.emergency.is_none_or(|current| kind > current);
-        if changed {
-            flight.emergency = Some(kind);
-        }
+            .expect("declare_emergency: key just read is missing");
+        flight.emergency = Some(kind);
         // A18
         assert!(
-            flight.emergency >= previous,
-            "declare_emergency: {id} downgraded"
+            flight.emergency > previous,
+            "declare_emergency: {id} not upgraded"
         );
         self.enqueue(flight);
         assert_eq!(
@@ -426,13 +440,11 @@ impl Airport {
             queued,
             "declare_emergency: queue size changed"
         );
-        if changed {
-            out.push(Output::EmergencyDeclared {
-                flight: id.to_owned(),
-                at_ms: self.now_ms,
-                kind,
-            });
-        }
+        out.push(Output::EmergencyDeclared {
+            flight: id.to_owned(),
+            at_ms: self.now_ms,
+            kind,
+        });
     }
 
     fn set_closure(&mut self, name: &str, reason: Reason, closed: bool, out: &mut Vec<Output>) {
@@ -657,7 +669,9 @@ impl Airport {
             t = t.max(d.at_ms + gap);
         }
         // A crossing runway is never active at the same time, but its last
-        // aircraft may still be on it just after a change of runways.
+        // aircraft may still be on it just after a change of runways. Its
+        // mayday inspection holds this runway too: the inspection covers the
+        // pavement the two runways share.
         for c in 0..self.runways.len() {
             if self.crossing[r] & (1 << c) != 0 {
                 t = t.max(self.busy_until(c));

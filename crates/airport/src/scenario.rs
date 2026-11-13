@@ -206,6 +206,94 @@ mod tests {
         );
     }
 
+    fn ticks(commands: &[Command]) -> Vec<String> {
+        commands
+            .iter()
+            .map(|c| match c {
+                Command::AdvanceTime { now_ms } => format!("t{now_ms}"),
+                Command::SetWind { speed_kt, .. } => format!("w{speed_kt}"),
+                Command::GroundStop { .. } => "stop".to_owned(),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_last_tick_stops_at_the_end() {
+        assert_eq!(ticks(&script(vec![], 10, 25)), ["t10", "t20", "t25"]);
+    }
+
+    #[test]
+    fn a_zero_tick_is_treated_as_one() {
+        assert_eq!(ticks(&script(vec![], 0, 3)), ["t1", "t2", "t3"]);
+    }
+
+    #[test]
+    fn nothing_in_nothing_out() {
+        assert_eq!(script(vec![], 10, 0), []);
+    }
+
+    #[test]
+    fn a_command_after_the_end_is_still_sent() {
+        assert_eq!(
+            ticks(&script(vec![wind(50)], 10, 25)),
+            ["t10", "t20", "t30", "t40", "t50", "w50"]
+        );
+    }
+
+    #[test]
+    fn commands_at_the_same_moment_keep_their_given_order() {
+        // Two different commands, so a sort that swapped them would show.
+        let stop = Timed {
+            at_ms: 25,
+            command: Command::GroundStop {
+                reason: crate::Reason::Storm,
+            },
+        };
+        assert_eq!(
+            ticks(&script(vec![wind(25), stop.clone()], 10, 30)),
+            ["t10", "t20", "t25", "w25", "stop", "t30"]
+        );
+        assert_eq!(
+            ticks(&script(vec![stop, wind(25)], 10, 30)),
+            ["t10", "t20", "t25", "stop", "w25", "t30"]
+        );
+    }
+
+    #[test]
+    fn an_empty_scenario_ends_where_it_starts() {
+        let result = run(&Scenario {
+            airport: AirportConfig::demo(),
+            commands: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(result.start, result.end);
+        assert!(result.outputs.is_empty());
+    }
+
+    #[test]
+    fn stats_add_up_to_the_outputs() {
+        let result = run(&demo(1, 6, 40, 40)).unwrap();
+        let (mut arrivals, mut departures) = (0, 0);
+        for output in &result.outputs {
+            match output {
+                Output::Landed { delay_ms, .. } => arrivals += delay_ms,
+                Output::Departed { delay_ms, .. } => departures += delay_ms,
+                _ => {}
+            }
+        }
+        assert_eq!(result.end.stats.arrival_delay_ms, arrivals);
+        assert_eq!(result.end.stats.departure_delay_ms, departures);
+    }
+
+    #[test]
+    fn a_run_result_survives_json() {
+        let result = run(&demo(3, 1, 20, 20)).unwrap();
+        let json = serde_json::to_string(&result).unwrap();
+        let back: RunResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, result);
+    }
+
     #[test]
     fn a_scenario_survives_a_round_trip_through_json() {
         let scenario = demo(3, 1, 20, 20);

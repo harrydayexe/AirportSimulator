@@ -154,4 +154,68 @@ mod tests {
     fn a_curfew_starts_within_the_day() {
         let _ = curfew(31 * MS_PER_HOUR, 6 * MS_PER_HOUR, MS_PER_DAY);
     }
+
+    fn times(commands: &[Timed]) -> Vec<Ms> {
+        commands.iter().map(|c| c.at_ms).collect()
+    }
+
+    #[test]
+    fn a_daytime_curfew_stays_inside_the_day() {
+        let commands = curfew(MS_PER_HOUR, 5 * MS_PER_HOUR, MS_PER_DAY);
+        assert_eq!(times(&commands), [MS_PER_HOUR, 5 * MS_PER_HOUR]);
+    }
+
+    #[test]
+    fn equal_start_and_end_is_a_full_day() {
+        let commands = curfew(0, 0, MS_PER_DAY);
+        assert_eq!(times(&commands), [0, MS_PER_DAY]);
+    }
+
+    #[test]
+    fn no_curfew_starts_at_or_after_the_limit() {
+        assert_eq!(curfew(0, MS_PER_HOUR, 0), []);
+        // A start of a whole day is not a time of day, so the limit is
+        // tested just inside it.
+        assert_eq!(curfew(MS_PER_DAY - 1, MS_PER_HOUR, MS_PER_DAY - 1), []);
+    }
+
+    #[test]
+    #[should_panic(expected = "not a time of day")]
+    fn a_curfew_end_must_be_within_the_day() {
+        let _ = curfew(0, MS_PER_DAY + 1, MS_PER_DAY);
+    }
+
+    #[test]
+    fn maintenance_that_would_start_at_the_limit_is_left_out() {
+        assert_eq!(maintenance("09", 100, 10, 0, 100), []);
+    }
+
+    #[test]
+    #[should_panic(expected = "zero-length")]
+    fn maintenance_must_take_some_time() {
+        let _ = maintenance("09", 0, 0, 0, 100);
+    }
+
+    #[test]
+    fn a_wind_schedule_keeps_its_order() {
+        let commands = wind_schedule(&[(30, 90, 5), (10, 180, 12), (20, 360, 0)]);
+        let summary: Vec<(Ms, u16, u16)> = commands
+            .iter()
+            .map(|t| match t.command {
+                Command::SetWind {
+                    direction_deg,
+                    speed_kt,
+                } => (t.at_ms, direction_deg, speed_kt),
+                ref other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(summary, [(30, 90, 5), (10, 180, 12), (20, 360, 0)]);
+        assert_eq!(wind_schedule(&[]), []);
+    }
+
+    #[test]
+    #[should_panic(expected = "above 360")]
+    fn a_wind_schedule_refuses_a_bad_direction() {
+        let _ = wind_schedule(&[(0, 361, 5)]);
+    }
 }

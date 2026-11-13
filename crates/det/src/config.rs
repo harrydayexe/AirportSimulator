@@ -58,6 +58,14 @@ mod tests {
     }
 
     #[test]
+    fn default_config_leaves_room_for_heartbeats() {
+        let config = Config::default();
+        assert_eq!(config.heartbeat_interval, Ms(50));
+        assert_eq!(config.base_election_timeout, Ms(150));
+        assert!(config.heartbeat_interval < config.base_election_timeout);
+    }
+
+    #[test]
     #[should_panic(expected = "is not below")]
     fn heartbeat_must_beat_the_election_timeout() {
         Config {

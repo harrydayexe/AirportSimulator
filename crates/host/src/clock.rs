@@ -33,3 +33,32 @@ impl Clock {
         self.now = to;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_clock_reads_zero() {
+        assert_eq!(Clock::default().now(), Ms(0));
+    }
+
+    #[test]
+    fn the_clock_moves_forward_and_may_stand_still() {
+        let mut clock = Clock::default();
+        let mut seen = Vec::new();
+        for to in [10, 10, 25] {
+            clock.advance_to(Ms(to));
+            seen.push(clock.now());
+        }
+        assert_eq!(seen, [Ms(10), Ms(10), Ms(25)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "go back")]
+    fn time_never_goes_backwards() {
+        let mut clock = Clock::default();
+        clock.advance_to(Ms(10));
+        clock.advance_to(Ms(5));
+    }
+}

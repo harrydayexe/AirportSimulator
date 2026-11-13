@@ -243,3 +243,49 @@ pub enum Status {
     /// Placeholder value.
     Healthy,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requests_and_replies_are_told_apart() {
+        let append = MessageCommand::<u8>::AppendEntries {
+            prev_index: Index(0),
+            prev_term: Term(0),
+            entries: Vec::new(),
+        };
+        let reply = MessageCommand::<u8>::AppendReply {
+            success: true,
+            last_match_index: Index(0),
+        };
+        assert!(MessageCommand::<u8>::RequestVote.is_request());
+        assert!(!MessageCommand::<u8>::VoteReply.is_request());
+        assert!(append.is_request());
+        assert!(!reply.is_request());
+    }
+
+    #[test]
+    fn durable_and_message_keep_what_they_are_given() {
+        let log = vec![Entry {
+            term: Term(2),
+            payload: Payload::Command(7u8),
+        }];
+        let durable = Durable::new(Term(3), Some(NodeId(2)), log);
+        assert_eq!(durable.term, Term(3));
+        assert_eq!(durable.voted_for, Some(NodeId(2)));
+        assert_eq!(
+            durable.log,
+            [Entry {
+                term: Term(2),
+                payload: Payload::Command(7)
+            }]
+        );
+        durable.assert_valid();
+
+        let message = Message::new(Term(4), MessageCommand::<u8>::VoteReply);
+        assert_eq!(message.term, Term(4));
+        assert_eq!(message.command, MessageCommand::VoteReply);
+        message.assert_valid();
+    }
+}

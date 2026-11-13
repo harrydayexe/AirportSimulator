@@ -369,4 +369,127 @@ mod tests {
         assert_eq!(config.max_arrival_hold_ms, Some(45 * 60_000));
         assert_eq!(config.final_approach_nm, 6);
     }
+
+    fn parallels(count: usize) -> AirportConfig {
+        let runways = (0..count)
+            .map(|i| RunwayConfig::new(&format!("L{i}"), &format!("H{i}"), 90, 3_000))
+            .collect();
+        AirportConfig::new("Parallels", runways)
+    }
+
+    #[test]
+    fn twelve_runways_are_allowed_and_thirteen_are_not() {
+        let airport = crate::Airport::new(parallels(12)).unwrap();
+        assert_eq!(airport.active_runways().len(), 12);
+        assert_eq!(parallels(13).validate(), Err(ConfigError::TooManyRunways));
+    }
+
+    #[test]
+    fn a_heading_must_be_below_360() {
+        let mut config = AirportConfig::single_runway();
+        config.runways[0].heading_deg = 359;
+        assert!(config.validate().is_ok());
+        config.runways[0].heading_deg = 360;
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::BadHeading("09/27".into()))
+        );
+    }
+
+    #[test]
+    fn a_runway_cannot_cross_itself_under_another_name() {
+        let mut config = AirportConfig::demo();
+        config.crossings = vec![("09L".into(), "27R".into())];
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::SelfCrossing("09L".into()))
+        );
+    }
+
+    #[test]
+    fn both_ends_of_one_runway_need_different_names() {
+        let config = AirportConfig::new("Same", vec![RunwayConfig::new("09", "09", 90, 3_000)]);
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::DuplicateRunwayName("09".into()))
+        );
+    }
+
+    #[test]
+    fn a_crossing_listed_twice_is_the_same_as_once() {
+        let once = AirportConfig::demo().validate().unwrap();
+        for extra in [("18", "09L"), ("18/36", "09L/27R"), ("27R", "36")] {
+            let mut config = AirportConfig::demo();
+            config.crossings.push((extra.0.into(), extra.1.into()));
+            assert_eq!(config.validate().unwrap(), once, "{extra:?}");
+        }
+    }
+
+    #[test]
+    fn every_config_error_reads_as_a_sentence() {
+        let cases = [
+            (
+                ConfigError::NoRunways,
+                "an airport needs at least one runway",
+            ),
+            (
+                ConfigError::TooManyRunways,
+                "an airport may have at most 12 runways",
+            ),
+            (
+                ConfigError::DuplicateRunwayName("09".into()),
+                "runway end name 09 is used twice",
+            ),
+            (
+                ConfigError::BadHeading("09/27".into()),
+                "runway 09/27 has a heading of 360 or more",
+            ),
+            (
+                ConfigError::UnknownCrossing("04".into()),
+                "crossing names unknown runway 04",
+            ),
+            (
+                ConfigError::SelfCrossing("09L".into()),
+                "runway 09L cannot cross itself",
+            ),
+            (
+                ConfigError::BadRunwayName("a/b".into()),
+                "runway end name \"a/b\" is empty or contains '/'",
+            ),
+            (
+                ConfigError::OutOfRange("exit_extra_ms"),
+                "exit_extra_ms is above its limit",
+            ),
+        ];
+        for (error, text) in cases {
+            assert_eq!(error.to_string(), text);
+        }
+    }
+
+    #[test]
+    fn a_full_name_must_be_low_then_high() {
+        let runway = RunwayConfig::new("09L", "27R", 90, 3_000);
+        assert!(runway.is_named("09L/27R"));
+        assert!(!runway.is_named("27R/09L"));
+        assert!(!runway.is_named(""));
+    }
+
+    #[test]
+    fn a_null_hold_limit_means_wait_for_ever() {
+        let runway = r#"[{"low":"09","high":"27","heading_deg":90,"length_m":3000}]"#;
+        let with_null = format!(r#"{{"name":"X","runways":{runway},"max_arrival_hold_ms":null}}"#);
+        let config: AirportConfig = serde_json::from_str(&with_null).unwrap();
+        assert_eq!(config.max_arrival_hold_ms, None);
+        let absent = format!(r#"{{"name":"X","runways":{runway}}}"#);
+        let config: AirportConfig = serde_json::from_str(&absent).unwrap();
+        assert_eq!(config.max_arrival_hold_ms, Some(45 * 60_000));
+        assert_eq!(config.runways[0].exit_extra_ms, 0);
+    }
+
+    #[test]
+    fn no_runways_is_reported_before_anything_else() {
+        let mut config = AirportConfig::new("None", vec![]);
+        config.crossings = vec![("A".into(), "B".into())];
+        assert_eq!(config.validate(), Err(ConfigError::NoRunways));
+    }
 }

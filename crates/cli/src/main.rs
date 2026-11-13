@@ -240,3 +240,251 @@ fn describe(output: &Output) -> Option<String> {
         ),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use host::airport::{Emergency, Reason, RejectReason};
+
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn clock_formats_simulated_time() {
+        assert_eq!(clock(0), "00:00:00");
+        assert_eq!(clock(999), "00:00:00");
+        assert_eq!(clock(3_661_000), "01:01:01");
+        assert_eq!(clock(86_399_999), "23:59:59");
+        // Hours are not wrapped at a day.
+        assert_eq!(clock(360_000_000), "100:00:00");
+    }
+
+    #[test]
+    fn options_have_defaults() {
+        let options = parse(&[]).unwrap();
+        assert_eq!(options.demo, DemoOptions::default());
+        assert_eq!(options.demo.seed, 1);
+        assert_eq!(options.demo.hours, 6);
+        assert_eq!(options.demo.arrivals_per_hour, 40);
+        assert_eq!(options.demo.departures_per_hour, 40);
+        assert!(!options.json && !options.quiet);
+        assert_eq!(options.file, None);
+    }
+
+    #[test]
+    fn each_option_is_read() {
+        let options = parse(&args(&[
+            "--seed",
+            "7",
+            "--hours",
+            "2",
+            "--arrivals",
+            "10",
+            "--departures",
+            "5",
+            "--json",
+            "--quiet",
+            "file.json",
+        ]))
+        .unwrap();
+        assert_eq!(
+            options.demo,
+            DemoOptions {
+                seed: 7,
+                hours: 2,
+                arrivals_per_hour: 10,
+                departures_per_hour: 5,
+            }
+        );
+        assert!(options.json && options.quiet);
+        assert_eq!(options.file.as_deref(), Some("file.json"));
+    }
+
+    #[test]
+    fn a_number_option_needs_a_number() {
+        for list in [
+            &["--seed"][..],
+            &["--seed", "x"],
+            &["--seed", "-5"],
+            &["--seed", "--json"],
+        ] {
+            let Err(error) = parse(&args(list)) else {
+                panic!("{list:?} was accepted");
+            };
+            assert!(error.starts_with("--seed needs a whole number"), "{error}");
+        }
+    }
+
+    #[test]
+    fn an_hour_count_must_fit() {
+        let Err(error) = parse(&args(&["--hours", "4294967296"])) else {
+            panic!("accepted");
+        };
+        assert_eq!(error, "4294967296 is too large");
+    }
+
+    #[test]
+    fn unknown_and_surplus_arguments_are_refused() {
+        for (list, start) in [
+            (&["--bogus"][..], "unexpected argument --bogus"),
+            (&["a.json", "b.json"], "unexpected argument b.json"),
+        ] {
+            let Err(error) = parse(&args(list)) else {
+                panic!("{list:?} was accepted");
+            };
+            assert!(error.starts_with(start), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_dash_means_standard_input() {
+        assert_eq!(parse(&args(&["-"])).unwrap().file.as_deref(), Some("-"));
+    }
+
+    #[test]
+    fn no_command_or_an_unknown_one_prints_usage() {
+        assert_eq!(run(&[]), Err(USAGE.to_owned()));
+        assert_eq!(run(&args(&["fly"])), Err(USAGE.to_owned()));
+    }
+
+    #[test]
+    fn gen_prints_the_scenario_the_host_builds() {
+        let expected = host::demo_scenario_json(DemoOptions {
+            seed: 7,
+            ..DemoOptions::default()
+        }) + "\n";
+        assert_eq!(run(&args(&["gen", "--seed", "7"])), Ok(expected));
+    }
+
+    #[test]
+    fn run_needs_a_file_that_exists() {
+        let error = run(&args(&["run"])).unwrap_err();
+        assert!(error.starts_with("run needs a scenario file"), "{error}");
+        let error = run(&args(&["run", "/no/such/file"])).unwrap_err();
+        assert!(error.starts_with("cannot read /no/such/file: "), "{error}");
+    }
+
+    #[test]
+    fn a_mean_delay_with_no_flights_is_zero() {
+        let empty = r#"{"airport":{"name":"X","runways":[{"low":"09","high":"27","heading_deg":90,"length_m":3000}]},"commands":[]}"#;
+        let result = host::run_scenario(empty).unwrap();
+        let text = report(&result, true);
+        assert!(text.contains("landed       0 (mean delay 0 s)"), "{text}");
+        assert!(text.contains("departed     0 (mean delay 0 s)"), "{text}");
+    }
+
+    fn landed(emergency: Option<Emergency>) -> Output {
+        Output::Landed {
+            flight: "BAW1".into(),
+            aircraft: "A320".into(),
+            runway: "27L".into(),
+            at_ms: 60_000,
+            vacated_ms: 110_000,
+            delay_ms: 12_000,
+            emergency,
+        }
+    }
+
+    #[test]
+    fn every_output_has_its_line() {
+        let line = |output: Output| describe(&output).unwrap();
+        assert_eq!(
+            describe(&Output::Accepted {
+                flight: "A".into(),
+                at_ms: 0
+            }),
+            None
+        );
+        assert_eq!(
+            line(landed(Some(Emergency::Mayday))),
+            "00:01:00 BAW1 (A320) landed on 27L, delayed 12 s [mayday]"
+        );
+        assert!(line(landed(Some(Emergency::PanPan))).ends_with(" [panpan]"));
+        assert!(line(landed(None)).ends_with("delayed 12 s"));
+        assert_eq!(
+            line(Output::Departed {
+                flight: "D".into(),
+                aircraft: "B738".into(),
+                runway: "09".into(),
+                at_ms: 0,
+                vacated_ms: 40_000,
+                delay_ms: 0,
+                emergency: None,
+            }),
+            "00:00:00 D (B738) departed from 09, delayed 0 s"
+        );
+        assert_eq!(
+            line(Output::WindChanged {
+                at_ms: 0,
+                direction_deg: 5,
+                speed_kt: 10
+            }),
+            "00:00:00 wind 005 at 10 kt"
+        );
+        assert!(
+            line(Output::RunwayOpened {
+                runway: "09/27".into(),
+                at_ms: 0,
+                reason: Reason::Storm,
+                open: false
+            })
+            .contains("still closed")
+        );
+        assert!(
+            line(Output::GroundStopLifted {
+                at_ms: 0,
+                reason: Reason::Storm,
+                clear: false
+            })
+            .ends_with(", another remains")
+        );
+        assert!(
+            line(Output::Rejected {
+                subject: "A".into(),
+                at_ms: 0,
+                reason: RejectReason::DuplicateFlight
+            })
+            .contains("rejected: DuplicateFlight")
+        );
+        assert_eq!(
+            line(Output::RunwayInspection {
+                runway: "09/27".into(),
+                from_ms: 60_000,
+                until_ms: 960_000
+            }),
+            "00:01:00 runway 09/27 shut for inspection until 00:16:00"
+        );
+        assert_eq!(
+            line(Output::ActiveRunways {
+                at_ms: 0,
+                runways: vec!["27R".into(), "27L".into()]
+            }),
+            "00:00:00 runways in use: 27R, 27L"
+        );
+        for output in [
+            Output::Diverted {
+                flight: "A".into(),
+                at_ms: 0,
+                reason: host::airport::command::DivertReason::HoldLimit,
+            },
+            Output::EmergencyDeclared {
+                flight: "A".into(),
+                at_ms: 0,
+                kind: Emergency::Mayday,
+            },
+            Output::RunwayClosed {
+                runway: "09/27".into(),
+                at_ms: 0,
+                reason: Reason::Storm,
+            },
+            Output::GroundStopStarted {
+                at_ms: 0,
+                reason: Reason::Storm,
+            },
+        ] {
+            assert!(line(output).starts_with("00:00:00 "));
+        }
+    }
+}

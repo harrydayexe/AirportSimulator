@@ -73,11 +73,34 @@ test-web: wasm
 
 # Formatting, lints (incl. the determinism ban) and type checks
 [group("check")]
-check: wasm
+check: wasm check-ban
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo clippy -p airport-sim-wasm --target {{ wasm_target }} -- -D warnings
     cd web && bun run typecheck
+
+# Check the determinism ban still catches one of each banned item
+[group("check")]
+[script("bash")]
+check-ban:
+    set -euo pipefail
+    output=$(CLIPPY_CONF_DIR="$PWD" cargo clippy --quiet \
+        --manifest-path tests/ban-canary/Cargo.toml --target-dir target/ban-canary \
+        -- -D clippy::disallowed_methods -D clippy::disallowed_types -D clippy::float_arithmetic \
+        2>&1 || true)
+    status=0
+    for expected in \
+        'disallowed method `std::time::Instant::now`' \
+        'disallowed type `std::collections::HashMap`' \
+        'disallowed method `std::thread::spawn`' \
+        'disallowed type `std::sync::Mutex`' \
+        'floating-point arithmetic detected'; do
+        if ! grep -qF "$expected" <<<"$output"; then
+            echo "the ban no longer reports: $expected" >&2
+            status=1
+        fi
+    done
+    exit "$status"
 
 # Format Rust code
 [group("check")]

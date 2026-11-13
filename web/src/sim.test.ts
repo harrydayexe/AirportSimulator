@@ -1,4 +1,5 @@
 import { beforeAll, expect, test } from "bun:test";
+import * as wasmModule from "./wasm/airport_sim_wasm.js";
 import init, { demoScenario, runScenario } from "./wasm/airport_sim_wasm.js";
 import type { AirportConfig, RunResult } from "./sim";
 import { buildTimeline } from "./timeline";
@@ -42,6 +43,20 @@ test.each(["1", "7", "123456", "18446744073709551615"])(
 
 test("runScenario reports a bad scenario", () => {
   expect(() => runScenario("{")).toThrow("invalid scenario");
+});
+
+test("runScenario reports an invalid airport", () => {
+  const noRunways = JSON.stringify({ airport: { name: "X", runways: [] }, commands: [] });
+  expect(() => runScenario(noRunways)).toThrow("invalid airport");
+});
+
+// A new export must be a deliberate change.
+test("the WebAssembly module exports exactly the documented functions", () => {
+  const functions = Object.entries(wasmModule)
+    .filter(([, value]) => typeof value === "function")
+    .map(([name]) => name)
+    .sort();
+  expect(functions).toEqual(["default", "demoScenario", "initSync", "runScenario"]);
 });
 
 test("the timeline accounts for every movement and closure", () => {

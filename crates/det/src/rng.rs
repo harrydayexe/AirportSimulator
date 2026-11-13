@@ -94,4 +94,50 @@ mod tests {
         }
         assert_eq!(rng.below(0), 0);
     }
+
+    #[test]
+    fn below_sequence_is_pinned() {
+        // Traffic is drawn with `below`, so a change here changes every
+        // recorded seed's flights.
+        let mut rng = Rng::new(42);
+        let values: Vec<u64> = (0..8).map(|_| rng.below(10)).collect();
+        assert_eq!(values, [0, 3, 6, 9, 9, 7, 7, 8]);
+    }
+
+    #[test]
+    fn below_one_is_always_zero() {
+        let mut rng = Rng::new(3);
+        assert!((0..100).all(|_| rng.below(1) == 0));
+    }
+
+    #[test]
+    fn below_is_roughly_uniform() {
+        // The seed is fixed, so this cannot flake.
+        let mut rng = Rng::new(7);
+        let mut counts = [0u32; 3];
+        for _ in 0..3_000 {
+            counts[usize::try_from(rng.below(3)).unwrap()] += 1;
+        }
+        assert_eq!(counts, [1021, 936, 1043]);
+        assert!(counts.iter().all(|c| (900..1100).contains(c)));
+    }
+
+    #[test]
+    fn a_clone_continues_the_same_sequence() {
+        let mut rng = Rng::new(9);
+        for _ in 0..5 {
+            rng.next_u64();
+        }
+        let mut copy = rng.clone();
+        let a: Vec<u64> = (0..5).map(|_| rng.next_u64()).collect();
+        let b: Vec<u64> = (0..5).map(|_| copy.next_u64()).collect();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn different_seeds_give_different_sequences() {
+        let firsts: std::collections::BTreeSet<u64> =
+            (0..100).map(|seed| Rng::new(seed).next_u64()).collect();
+        assert_eq!(firsts.len(), 100);
+    }
 }

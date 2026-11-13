@@ -196,7 +196,7 @@ export function buildTimeline(airport: AirportConfig, result: RunResult): Timeli
 }
 
 /** The parts of `band` not covered by any of `holes`. */
-function subtract(band: Band, holes: Band[]): Band[] {
+export function subtract(band: Band, holes: Band[]): Band[] {
   let parts = [band];
   for (const hole of holes) {
     parts = parts.flatMap((p) => {

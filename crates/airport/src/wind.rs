@@ -92,4 +92,49 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(a.crosswind_e4, 17_360);
     }
+
+    #[test]
+    fn forty_five_degrees_splits_the_wind_evenly() {
+        let c = components(wind(45, 20), 90);
+        assert_eq!(c.headwind_e4, 141_420);
+        assert_eq!(c.crosswind_e4, 141_420);
+    }
+
+    #[test]
+    fn a_wind_from_behind_is_a_negative_headwind() {
+        // 150 degrees off: headwind -10 cos 30, crosswind 10 sin 30.
+        let c = components(wind(240, 10), 90);
+        assert_eq!(c.headwind_e4, -86_600);
+        assert_eq!(c.crosswind_e4, 50_000);
+    }
+
+    #[test]
+    fn the_opposite_end_sees_the_same_crosswind_and_the_opposite_headwind() {
+        for direction in 0..360 {
+            for heading in (0..360).step_by(5) {
+                let w = wind(direction, 17);
+                let a = components(w, heading);
+                let b = components(w, (heading + 180) % 360);
+                assert_eq!(a.crosswind_e4, b.crosswind_e4, "{direction} on {heading}");
+                assert_eq!(a.headwind_e4, -b.headwind_e4, "{direction} on {heading}");
+                assert!(a.crosswind_e4 <= 170_000);
+                assert!(a.headwind_e4.unsigned_abs() <= 170_000);
+            }
+        }
+    }
+
+    #[test]
+    fn the_strongest_wind_does_not_overflow() {
+        let c = components(wind(45, u16::MAX), 90);
+        assert_eq!(c.headwind_e4, 463_397_985);
+        assert_eq!(c.crosswind_e4, 463_397_985);
+    }
+
+    #[test]
+    fn calm_has_no_components() {
+        for direction in [0, 90, 181, 359] {
+            let c = components(wind(direction, 0), 90);
+            assert_eq!((c.headwind_e4, c.crosswind_e4), (0, 0));
+        }
+    }
 }

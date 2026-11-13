@@ -208,4 +208,90 @@ mod tests {
         assert_eq!(landings, 60);
         assert!(traffic.windows(2).all(|w| w[0].at_ms <= w[1].at_ms));
     }
+
+    /// `(flight, earliest_ms, aircraft, landing)` of every request.
+    fn requests(traffic: &[Timed]) -> Vec<(String, Ms, String, bool)> {
+        traffic
+            .iter()
+            .map(|t| match &t.command {
+                Command::RequestLanding {
+                    flight,
+                    aircraft,
+                    earliest_ms,
+                } => (flight.clone(), *earliest_ms, aircraft.clone(), true),
+                Command::RequestDeparture {
+                    flight,
+                    aircraft,
+                    earliest_ms,
+                } => (flight.clone(), *earliest_ms, aircraft.clone(), false),
+                other => panic!("unexpected command {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_flight_count_rounds_to_nearest() {
+        let count = |duration_ms, per_hour| {
+            generate(&TrafficParams::new(1, duration_ms, per_hour, 0)).len()
+        };
+        assert_eq!(count(30 * 60_000, 1), 1);
+        assert_eq!(count(29 * 60_000, 1), 0);
+        assert_eq!(count(0, 1_000), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty mix")]
+    fn an_empty_mix_is_a_bug() {
+        let mut params = TrafficParams::new(1, MS_PER_HOUR, 5, 0);
+        params.mix = vec![];
+        let _ = generate(&params);
+    }
+
+    #[test]
+    fn flights_are_numbered_from_100_arrivals_first() {
+        let traffic = requests(&generate(&TrafficParams::new(4, MS_PER_HOUR, 3, 2)));
+        let mut numbers: Vec<u32> = traffic.iter().map(|r| r.0[3..].parse().unwrap()).collect();
+        numbers.sort_unstable();
+        assert_eq!(numbers, [100, 101, 102, 103, 104]);
+        let mut landing: Vec<u32> = traffic
+            .iter()
+            .filter(|r| r.3)
+            .map(|r| r.0[3..].parse().unwrap())
+            .collect();
+        landing.sort_unstable();
+        assert_eq!(landing, [100, 101, 102]);
+    }
+
+    #[test]
+    fn notice_longer_than_the_wait_files_at_time_zero() {
+        let mut params = TrafficParams::new(2, MS_PER_HOUR, 10, 10);
+        params.notice_ms = u64::MAX;
+        assert!(generate(&params).iter().all(|t| t.at_ms == 0));
+    }
+
+    #[test]
+    fn requested_times_fall_in_the_window() {
+        let mut params = TrafficParams::new(5, MS_PER_HOUR, 30, 30);
+        params.start_ms = 1_000_000;
+        let window = 1_000_000..1_000_000 + MS_PER_HOUR;
+        assert!(
+            requests(&generate(&params))
+                .iter()
+                .all(|r| window.contains(&r.1))
+        );
+    }
+
+    #[test]
+    fn a_single_type_mix_and_a_zero_weight() {
+        let mut params = TrafficParams::new(6, MS_PER_HOUR, 20, 20);
+        params.mix = vec![("A320".into(), 0), ("B738".into(), 5)];
+        assert!(requests(&generate(&params)).iter().all(|r| r.2 == "B738"));
+    }
+
+    #[test]
+    fn pick_lands_on_the_right_side_of_each_boundary() {
+        let mix = vec![("FIRST".to_owned(), 3), ("SECOND".to_owned(), 2)];
+        let picks: Vec<String> = [0, 2, 3, 4].iter().map(|r| pick(&mix, *r)).collect();
+        assert_eq!(picks, ["FIRST", "FIRST", "SECOND", "SECOND"]);
+    }
 }

@@ -53,7 +53,8 @@ variant needs a doc comment, and `just check` (which denies warnings) fails with
 | `just setup` | Install the wasm target, the pinned `wasm-bindgen` CLI and web deps |
 | `just build` | Build the Rust workspace, the wasm bundle and the web app |
 | `just test` | All tests (`just test-rust`, `just test-web`) |
-| `just check` | `rustfmt --check`, clippy (native + wasm32), TypeScript typecheck |
+| `just check` | `rustfmt --check`, clippy (native + wasm32), TypeScript typecheck, `check-ban` |
+| `just check-ban` | Clippy on `tests/ban-canary/`, which must report every banned item |
 | `just ci` | Everything CI runs: `check`, `test`, `web-build` |
 | `just dev` | Rebuild wasm, then serve the web app at http://localhost:3000 |
 | `just wasm` | Rebuild only the wasm bindings (rerun after Rust changes) |

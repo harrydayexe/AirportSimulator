@@ -101,4 +101,29 @@ mod tests {
     fn usize_hashes_like_u64() {
         assert_eq!(fingerprint(&7usize), fingerprint(&7u64));
     }
+
+    #[test]
+    fn integers_hash_at_their_own_width() {
+        assert_eq!(fingerprint(&1u32), 0xad2a_ca77_4798_5764);
+        assert_ne!(fingerprint(&1u32), fingerprint(&1u64));
+    }
+
+    #[test]
+    fn a_tuple_hashes_its_fields_in_order() {
+        // FNV-1a of the bytes 01 02 00.
+        assert_eq!(fingerprint(&(1u8, 2u16)), 0xd0aa_6318_672c_f75e);
+    }
+
+    #[test]
+    fn isize_hashes_like_i64() {
+        assert_eq!(fingerprint(&-1isize), 0x8cf5_1a8b_fca3_883d);
+        assert_eq!(fingerprint(&-1isize), fingerprint(&-1i64));
+    }
+
+    #[test]
+    fn a_vec_hashes_its_length_as_eight_bytes() {
+        // This is the value a 32-bit machine would get wrong if
+        // `write_usize` were ever removed.
+        assert_eq!(fingerprint(&vec![1u8, 2]), 0x9b19_e1d3_2794_4d90);
+    }
 }
