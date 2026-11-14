@@ -73,11 +73,46 @@ test-web: wasm
 
 # Formatting, lints (incl. the determinism ban) and type checks
 [group("check")]
-check: wasm
+check: wasm check-ban check-layers
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo clippy -p airport-sim-wasm --target {{ wasm_target }} -- -D warnings
     cd web && bun run typecheck
+
+# Check the determinism ban still catches one of each banned item
+[group("check")]
+[script("bash")]
+check-ban:
+    set -euo pipefail
+    output=$(CLIPPY_CONF_DIR="$PWD" cargo clippy --quiet \
+        --manifest-path tests/ban-canary/Cargo.toml --target-dir target/ban-canary \
+        -- -D clippy::disallowed_methods -D clippy::disallowed_types -D clippy::float_arithmetic \
+        2>&1 || true)
+    status=0
+    for expected in \
+        'disallowed method `std::time::Instant::now`' \
+        'disallowed type `std::collections::HashMap`' \
+        'disallowed method `std::thread::spawn`' \
+        'disallowed type `std::sync::Mutex`' \
+        'floating-point arithmetic detected'; do
+        if ! grep -qF "$expected" <<<"$output"; then
+            echo "the ban no longer reports: $expected" >&2
+            status=1
+        fi
+    done
+    exit "$status"
+
+# Check that det, airport, raft and node never depend on host
+[group("check")]
+[script("bash")]
+check-layers:
+    set -euo pipefail
+    # Capture first so a cargo error (such as a cycle through host) fails the check.
+    tree=$(cargo tree -p det -p airport -p raft -p node -e normal,build --prefix none)
+    if grep -q '^host ' <<<"$tree"; then
+        echo "det, airport, raft or node depends on host; see AGENTS.md" >&2
+        exit 1
+    fi
 
 # Format Rust code
 [group("check")]

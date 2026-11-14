@@ -962,3 +962,558 @@ fn the_demo_shows_a_little_of_everything() {
         stats.landed + stats.departed + stats.diverted
     );
 }
+
+#[test]
+fn times_past_the_cap_are_rejected() {
+    use airport::data::{MAX_FILING_AHEAD_MS, MAX_TIME_MS};
+    let rejected = |a: &mut Airport, command: Command| match &a.apply(&command)[..] {
+        [Output::Rejected { reason, .. }] => *reason,
+        other => panic!("expected a rejection, got {other:?}"),
+    };
+    // Default demo airport: arrivals hold at most 45 minutes, so a request
+    // at u64::MAX used to overflow `ready_ms + hold` on the next tick.
+    let mut a = demo();
+    assert_eq!(
+        rejected(&mut a, land("A", "A320", u64::MAX)),
+        RejectReason::InvalidTime
+    );
+    // 120 hours ahead is the most a flight plan may be filed in advance.
+    assert!(matches!(
+        a.apply(&land("B", "A320", MAX_FILING_AHEAD_MS))[..],
+        [Output::Accepted { .. }]
+    ));
+    assert_eq!(
+        rejected(&mut a, depart("C", "A320", MAX_FILING_AHEAD_MS + 1)),
+        RejectReason::InvalidTime
+    );
+    // The clock itself stops at about 100 years.
+    assert_eq!(
+        rejected(&mut a, Command::AdvanceTime { now_ms: u64::MAX }),
+        RejectReason::InvalidTime
+    );
+    assert_eq!(a.now_ms(), 0);
+    a.apply(&Command::AdvanceTime {
+        now_ms: MAX_TIME_MS,
+    });
+    assert_eq!(a.now_ms(), MAX_TIME_MS);
+    a.check_invariants();
+}
+
+// ---------------------------------------------------------------------------
+// Commands that change nothing.
+// ---------------------------------------------------------------------------
+
+fn stop(reason: Reason) -> Command {
+    Command::GroundStop { reason }
+}
+
+fn lift(reason: Reason) -> Command {
+    Command::LiftGroundStop { reason }
+}
+
+fn at(now_ms: Ms) -> Command {
+    Command::AdvanceTime { now_ms }
+}
+
+/// Applies `command` and checks it said nothing and left no trace.
+fn assert_no_trace(a: &mut Airport, command: &Command) {
+    let before = a.fingerprint();
+    assert_eq!(a.apply(command), [], "{command:?} said something");
+    assert_eq!(a.fingerprint(), before, "{command:?} left a trace");
+}
+
+#[test]
+fn a_command_that_changes_nothing_says_nothing_and_leaves_no_trace() {
+    let mut a = demo();
+    send(
+        &mut a,
+        &[close("18", Reason::Storm), stop(Reason::Storm), wind(0, 5)],
+    );
+    for command in [
+        close("18", Reason::Storm),
+        open("18", Reason::Other),
+        stop(Reason::Storm),
+        lift(Reason::Other),
+        wind(360, 5),
+        at(a.now_ms()),
+    ] {
+        assert_no_trace(&mut a, &command);
+    }
+}
+
+#[test]
+fn undoing_a_change_restores_the_fingerprint() {
+    let mut a = demo();
+    let start = a.fingerprint();
+    for (change, undo) in [
+        (close("18", Reason::Storm), open("36", Reason::Storm)),
+        (stop(Reason::Curfew), lift(Reason::Curfew)),
+        (
+            close("09L", Reason::Incident),
+            open("27R", Reason::Incident),
+        ),
+    ] {
+        send(&mut a, &[change.clone(), undo]);
+        assert_eq!(a.fingerprint(), start, "{change:?} was not undone");
+    }
+}
+
+#[test]
+fn advancing_to_the_same_time_twice_does_nothing_more() {
+    let mut a = single();
+    for i in 0..5 {
+        send(&mut a, &[land(&format!("F{i}"), "A320", 0)]);
+    }
+    assert!(!a.apply(&at(100_000)).is_empty());
+    assert_no_trace(&mut a, &at(100_000));
+}
+
+// ---------------------------------------------------------------------------
+// Emergencies, inspections and holding.
+// ---------------------------------------------------------------------------
+
+fn queue_order(a: &Airport) -> Vec<String> {
+    a.snapshot().queue.into_iter().map(|q| q.flight).collect()
+}
+
+#[test]
+fn declaring_the_same_emergency_again_changes_nothing() {
+    let mut a = single();
+    send(
+        &mut a,
+        &[
+            land("X", "A320", 0),
+            land("Y", "A320", 0),
+            emergency("X", Emergency::PanPan),
+            emergency("Y", Emergency::PanPan),
+        ],
+    );
+    assert_eq!(queue_order(&a), ["X", "Y"]);
+    assert_no_trace(&mut a, &emergency("X", Emergency::PanPan));
+    assert_eq!(queue_order(&a), ["X", "Y"]);
+}
+
+#[test]
+fn a_downgrade_changes_nothing() {
+    let mut a = single();
+    send(
+        &mut a,
+        &[land("X", "A320", 0), emergency("X", Emergency::Mayday)],
+    );
+    assert_no_trace(&mut a, &emergency("X", Emergency::PanPan));
+}
+
+#[test]
+fn a_pan_pan_goes_first_but_closes_nothing() {
+    let mut a = single();
+    send(
+        &mut a,
+        &[
+            land("A", "A320", 0),
+            land("P", "A320", 0),
+            emergency("P", Emergency::PanPan),
+        ],
+    );
+    let out = advance(&mut a, MS_PER_HOUR, 1_000);
+    assert_eq!(movements(&out), [("P", "09", 0), ("A", "09", 78_833)]);
+    assert!(
+        !out.iter()
+            .any(|o| matches!(o, Output::RunwayInspection { .. }))
+    );
+}
+
+#[test]
+fn no_inspection_when_the_airport_sets_none() {
+    let mut config = AirportConfig::single_runway();
+    config.mayday_inspection_ms = 0;
+    let mut a = Airport::new(config).unwrap();
+    send(
+        &mut a,
+        &[
+            land("M", "A320", 0),
+            emergency("M", Emergency::Mayday),
+            land("N", "A320", 0),
+        ],
+    );
+    let out = advance(&mut a, MS_PER_HOUR, 1_000);
+    assert!(matches!(
+        out[0],
+        Output::Landed {
+            at_ms: 0,
+            emergency: Some(Emergency::Mayday),
+            ..
+        }
+    ));
+    assert!(
+        !out.iter()
+            .any(|o| matches!(o, Output::RunwayInspection { .. }))
+    );
+    // The next arrival follows at the normal A320 gap.
+    assert_eq!(times(&out), [0, 78_833]);
+}
+
+#[test]
+fn a_mayday_departure_closes_nothing() {
+    let mut a = single();
+    send(
+        &mut a,
+        &[depart("D", "A320", 0), emergency("D", Emergency::Mayday)],
+    );
+    let out = advance(&mut a, MS_PER_MINUTE, 1_000);
+    assert!(matches!(
+        out[..],
+        [Output::Departed {
+            at_ms: 0,
+            emergency: Some(Emergency::Mayday),
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn an_inspection_holds_the_crossing_runway_too() {
+    // The inspection covers the pavement the two runways share, so the
+    // crossing runway waits for it as well. A mayday lands on 27R at 0 and
+    // clears at 50 s; the inspection runs to 950 s. At 1 s a southerly gale
+    // leaves only runway 18, which crosses 27R. The E190 lands on 18 when
+    // the inspection ends, not at 50 s when 27R was physically clear.
+    let mut a = demo();
+    send(
+        &mut a,
+        &[
+            wind(270, 10),
+            land("M", "A320", 0),
+            emergency("M", Emergency::Mayday),
+        ],
+    );
+    let out = advance(&mut a, 1_000, 1_000);
+    assert_eq!(movements(&out), [("M", "27R", 0)]);
+    send(&mut a, &[wind(180, 30), land("E", "E190", 1_000)]);
+    assert_eq!(a.active_runways(), ["18"]);
+    let out = advance(&mut a, MS_PER_HOUR, 1_000);
+    assert_eq!(movements(&out), [("E", "18", 950_000)]);
+}
+
+/// Five A320s ready at 0 on the single runway, holding at most two gaps.
+fn holding_airport() -> Airport {
+    let mut config = AirportConfig::single_runway();
+    config.max_arrival_hold_ms = Some(2 * 78_833);
+    let mut a = Airport::new(config).unwrap();
+    for i in 0..5 {
+        send(&mut a, &[land(&format!("F{i}"), "A320", 0)]);
+    }
+    a
+}
+
+fn diverted(outputs: &[Output]) -> Vec<(&str, Ms)> {
+    outputs
+        .iter()
+        .filter_map(|o| match o {
+            Output::Diverted { flight, at_ms, .. } => Some((flight.as_str(), *at_ms)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_flight_may_land_exactly_at_its_limit_but_not_after() {
+    let mut a = holding_airport();
+    let out = advance(&mut a, 400_000, 1_000);
+    assert_eq!(times(&out), [0, 78_833, 157_666]);
+    assert_eq!(diverted(&out), [("F3", 157_666), ("F4", 157_666)]);
+}
+
+#[test]
+fn diversion_times_do_not_depend_on_the_tick() {
+    let fine = advance(&mut holding_airport(), 400_000, 1_000);
+    let coarse = holding_airport().apply(&at(400_000));
+    assert_eq!(fine, coarse);
+}
+
+#[test]
+fn arrivals_divert_during_a_ground_stop() {
+    let mut a = demo();
+    send(&mut a, &[stop(Reason::Storm), land("A", "A320", 0)]);
+    let out = advance(&mut a, 46 * MS_PER_MINUTE, 1_000);
+    assert_eq!(diverted(&out), [("A", 45 * MS_PER_MINUTE)]);
+}
+
+#[test]
+fn a_flight_about_to_divert_holds_no_one_else_up() {
+    let mut a = demo();
+    send(
+        &mut a,
+        &[
+            close("09L", Reason::Storm),
+            close("09R", Reason::Storm),
+            land("BIG", "A388", 0),
+            land("SMALL", "E190", 0),
+        ],
+    );
+    let out = advance(&mut a, 10 * MS_PER_MINUTE, 1_000);
+    assert_eq!(movements(&out), [("SMALL", "18", 0)]);
+    assert_eq!(queue_order(&a), ["BIG"]);
+}
+
+#[test]
+fn a_request_for_the_past_is_ready_now() {
+    let mut a = single();
+    advance(&mut a, 100_000, 100_000);
+    send(&mut a, &[land("A", "A320", 5)]);
+    let out = advance(&mut a, 200_000, 1_000);
+    assert!(matches!(
+        out[..],
+        [Output::Landed {
+            at_ms: 100_000,
+            delay_ms: 0,
+            ..
+        }]
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Wind.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn every_runway_out_of_limits_stops_the_airport_until_the_wind_drops() {
+    let mut a = single();
+    let out = send(&mut a, &[wind(0, 26)]);
+    assert!(out.contains(&Output::ActiveRunways {
+        at_ms: 0,
+        runways: vec![]
+    }));
+    send(&mut a, &[land("A", "A320", 0)]);
+    assert_eq!(advance(&mut a, 600_000, 1_000), []);
+    let out = send(&mut a, &[wind(0, 25)]);
+    assert!(out.contains(&Output::ActiveRunways {
+        at_ms: 600_000,
+        runways: vec!["09".into()]
+    }));
+    let out = advance(&mut a, 700_000, 1_000);
+    assert_eq!(movements(&out), [("A", "09", 600_000)]);
+}
+
+#[test]
+fn a_crosswind_exactly_on_the_limit_is_allowed() {
+    let mut a = single();
+    let out = send(&mut a, &[wind(0, 25)]);
+    assert!(matches!(out[..], [Output::WindChanged { .. }]));
+    assert_eq!(a.active_runways(), ["09"]);
+}
+
+#[test]
+fn turning_the_runway_round_does_not_reset_separation() {
+    let mut a = single();
+    send(
+        &mut a,
+        &[wind(270, 10), land("A", "A320", 0), land("B", "A320", 0)],
+    );
+    assert_eq!(movements(&advance(&mut a, 1_000, 1_000)), [("A", "27", 0)]);
+    let out = send(&mut a, &[wind(90, 10)]);
+    assert!(out.contains(&Output::ActiveRunways {
+        at_ms: 1_000,
+        runways: vec!["09".into()]
+    }));
+    let out = advance(&mut a, MS_PER_HOUR, 1_000);
+    assert_eq!(movements(&out), [("B", "09", 78_833)]);
+}
+
+#[test]
+fn equal_crosswinds_keep_the_first_listed_runway() {
+    let mut config = AirportConfig::new(
+        "Diagonal",
+        vec![
+            RunwayConfig::new("A1", "A2", 45, 3_000),
+            RunwayConfig::new("B1", "B2", 135, 3_000),
+        ],
+    );
+    config.crossings = vec![("A1".into(), "B1".into())];
+    let mut a = Airport::new(config).unwrap();
+    // 45 degrees off both.
+    send(&mut a, &[wind(90, 10)]);
+    assert_eq!(a.active_runways(), ["A1"]);
+    // 55 degrees off A, 35 degrees off B.
+    send(&mut a, &[wind(100, 10)]);
+    assert_eq!(a.active_runways(), ["B1"]);
+}
+
+#[test]
+fn in_calm_air_the_demo_uses_the_low_ends_of_both_parallels() {
+    assert_eq!(demo().active_runways(), ["09L", "09R"]);
+}
+
+// ---------------------------------------------------------------------------
+// Ground stops and curfews.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn movements_resume_only_when_every_ground_stop_is_lifted() {
+    let mut a = single();
+    send(
+        &mut a,
+        &[
+            stop(Reason::Storm),
+            stop(Reason::Curfew),
+            land("A", "A320", 0),
+        ],
+    );
+    advance(&mut a, 10_000, 1_000);
+    let out = send(&mut a, &[lift(Reason::Storm)]);
+    assert!(matches!(
+        out[..],
+        [Output::GroundStopLifted { clear: false, .. }]
+    ));
+    assert_eq!(advance(&mut a, 20_000, 1_000), []);
+    let out = send(&mut a, &[lift(Reason::Curfew)]);
+    assert!(matches!(
+        out[..],
+        [Output::GroundStopLifted { clear: true, .. }]
+    ));
+    let out = advance(&mut a, 30_000, 1_000);
+    assert!(matches!(
+        out[..],
+        [Output::Landed {
+            at_ms: 20_000,
+            delay_ms: 20_000,
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn nothing_moves_during_a_curfew() {
+    use airport::scenario::{Scenario, Timed, run, script};
+    use airport::{MS_PER_DAY, policy};
+    let mut timed = policy::curfew(23 * MS_PER_HOUR, 6 * MS_PER_HOUR, 2 * MS_PER_DAY);
+    for h in 0..48 {
+        let earliest_ms = h * MS_PER_HOUR + 30 * MS_PER_MINUTE;
+        timed.push(Timed {
+            at_ms: earliest_ms,
+            command: depart(&format!("D{h}"), "A320", earliest_ms),
+        });
+    }
+    let result = run(&Scenario {
+        airport: AirportConfig::single_runway(),
+        commands: script(timed, 5_000, 3 * MS_PER_DAY),
+    })
+    .unwrap();
+    let departed = times(&result.outputs);
+    assert_eq!(departed.len(), 48);
+    let curfews = [
+        23 * MS_PER_HOUR..30 * MS_PER_HOUR,
+        47 * MS_PER_HOUR..54 * MS_PER_HOUR,
+    ];
+    for t in &departed {
+        assert!(!curfews.iter().any(|c| c.contains(t)), "departed at {t}");
+    }
+    // The six before the first curfew go on time.
+    for (h, t) in departed.iter().take(6).enumerate() {
+        assert_eq!(*t, h as Ms * MS_PER_HOUR + 30 * MS_PER_MINUTE);
+    }
+    assert!(result.end.queue.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// The tick is part of the run (decision D-2).
+// ---------------------------------------------------------------------------
+
+/// A heavy lands at 0; a light arrival must then wait 363 269 ms behind it;
+/// a departure wants 100 000 ms.
+fn tick_example() -> Airport {
+    let mut a = single();
+    send(
+        &mut a,
+        &[
+            land("L", "B77W", 0),
+            land("F", "PC12", 0),
+            depart("G", "A320", 100_000),
+        ],
+    );
+    a
+}
+
+#[test]
+fn the_tick_is_part_of_the_run() {
+    // With fine ticks the departure slips into the gap ahead of F's claim
+    // (40 s on the runway, long before 363 269 ms). With one coarse step,
+    // F's moment has already passed when the queue is walked, so F goes
+    // first and G follows once the light has turned off (40 s). Replicas
+    // all apply the same `AdvanceTime` commands, so they still agree; the
+    // controller's tick is part of what defines a run.
+    let fine = advance(&mut tick_example(), 500_000, 1_000);
+    assert_eq!(
+        movements(&fine),
+        [("L", "09", 0), ("G", "09", 100_000), ("F", "09", 363_269)]
+    );
+    let coarse = tick_example().apply(&at(500_000));
+    assert_eq!(
+        movements(&coarse),
+        [("L", "09", 0), ("F", "09", 363_269), ("G", "09", 403_269)]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Snapshots, clones and the demo.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_snapshot_describes_the_state() {
+    let mut a = demo();
+    send(
+        &mut a,
+        &[
+            land("A", "A320", 0),
+            land("B", "A320", 0),
+            emergency("B", Emergency::PanPan),
+        ],
+    );
+    let snapshot = a.snapshot();
+    let queue: Vec<(&str, Option<Emergency>)> = snapshot
+        .queue
+        .iter()
+        .map(|q| (q.flight.as_str(), q.emergency))
+        .collect();
+    assert_eq!(queue, [("B", Some(Emergency::PanPan)), ("A", None)]);
+    let cross = &snapshot.runways[2];
+    assert_eq!(cross.name, "18/36");
+    assert_eq!(cross.active_end, None);
+    assert!(
+        snapshot
+            .runways
+            .iter()
+            .all(|r| r.inspection_until_ms.is_none())
+    );
+    assert_eq!(snapshot.fingerprint, format!("{:016x}", a.fingerprint()));
+    assert_eq!(snapshot.fingerprint.len(), 16);
+
+    // An inspection shows while it is under way, and not after.
+    let mut a = single();
+    send(
+        &mut a,
+        &[land("M", "A320", 0), emergency("M", Emergency::Mayday)],
+    );
+    advance(&mut a, 1_000, 1_000);
+    assert_eq!(a.snapshot().runways[0].inspection_until_ms, Some(950_000));
+    advance(&mut a, 950_000, 50_000);
+    assert_eq!(a.snapshot().runways[0].inspection_until_ms, None);
+}
+
+#[test]
+fn a_clone_is_independent() {
+    let original = demo();
+    let mut copy = original.clone();
+    assert_eq!(copy, original);
+    let before = original.fingerprint();
+    copy.apply(&land("A", "A320", 0));
+    assert_eq!(original.fingerprint(), before);
+    assert_ne!(copy, original);
+}
+
+#[test]
+fn the_demo_never_sends_a_command_that_is_refused() {
+    for seed in 0..40 {
+        let result = airport::scenario::run(&airport::scenario::demo(seed, 6, 45, 45)).unwrap();
+        assert_eq!(result.end.stats.rejected, 0, "seed {seed}");
+    }
+}

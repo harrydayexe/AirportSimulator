@@ -12,7 +12,9 @@ use crate::{MS_PER_HOUR, Ms, policy};
 /// A command and the simulated time at which it is sent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Timed {
+    /// When the command is sent.
     pub at_ms: Ms,
+    /// The command to send.
     pub command: Command,
 }
 
@@ -20,7 +22,9 @@ pub struct Timed {
 /// through the `advance_time` commands in the list.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Scenario {
+    /// The airport to build.
     pub airport: AirportConfig,
+    /// The commands to apply to it, in order.
     pub commands: Vec<Command>,
 }
 
@@ -38,9 +42,13 @@ pub struct RunResult {
 /// Turns timed commands into the list an airport is fed: the commands in
 /// time order (ties keep their given order), with an `advance_time` before
 /// each new moment and one every `tick_ms` up to `end_ms`.
+///
+/// # Panics
+/// Never, unless the interleaving below is broken (SC1).
 #[must_use]
 pub fn script(mut timed: Vec<Timed>, tick_ms: Ms, end_ms: Ms) -> Vec<Command> {
     timed.sort_by_key(|t| t.at_ms);
+    let sent_at: Vec<Ms> = timed.iter().map(|t| t.at_ms).collect();
     let tick_ms = tick_ms.max(1);
     let mut commands = Vec::new();
     let mut now = 0;
@@ -63,6 +71,28 @@ pub fn script(mut timed: Vec<Timed>, tick_ms: Ms, end_ms: Ms) -> Vec<Command> {
         commands.push(t.command);
     }
     advance(&mut commands, end_ms);
+
+    // SC1: the clock only moves forward, every command is sent once, and
+    // each is sent once the clock reads its own time.
+    let mut clock: Option<Ms> = None;
+    let mut sent_at = sent_at.into_iter();
+    for command in &commands {
+        if let Command::AdvanceTime { now_ms } = command {
+            assert!(
+                clock.is_none_or(|c| *now_ms > c),
+                "script: clock not rising"
+            );
+            clock = Some(*now_ms);
+        } else {
+            let at_ms = sent_at.next().expect("script: more commands than given");
+            assert_eq!(
+                at_ms,
+                clock.unwrap_or(0),
+                "script: command sent at the wrong time"
+            );
+        }
+    }
+    assert!(sent_at.next().is_none(), "script: a command was lost");
     commands
 }
 
@@ -154,7 +184,7 @@ mod tests {
             at_ms,
             command: Command::SetWind {
                 direction_deg: 0,
-                speed_kt: at_ms as u16,
+                speed_kt: u16::try_from(at_ms).unwrap(),
             },
         }
     }
@@ -174,6 +204,94 @@ mod tests {
             summary,
             ["w0", "t10", "t20", "w20", "t25", "w25", "w25", "t30", "t40"]
         );
+    }
+
+    fn ticks(commands: &[Command]) -> Vec<String> {
+        commands
+            .iter()
+            .map(|c| match c {
+                Command::AdvanceTime { now_ms } => format!("t{now_ms}"),
+                Command::SetWind { speed_kt, .. } => format!("w{speed_kt}"),
+                Command::GroundStop { .. } => "stop".to_owned(),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_last_tick_stops_at_the_end() {
+        assert_eq!(ticks(&script(vec![], 10, 25)), ["t10", "t20", "t25"]);
+    }
+
+    #[test]
+    fn a_zero_tick_is_treated_as_one() {
+        assert_eq!(ticks(&script(vec![], 0, 3)), ["t1", "t2", "t3"]);
+    }
+
+    #[test]
+    fn nothing_in_nothing_out() {
+        assert_eq!(script(vec![], 10, 0), []);
+    }
+
+    #[test]
+    fn a_command_after_the_end_is_still_sent() {
+        assert_eq!(
+            ticks(&script(vec![wind(50)], 10, 25)),
+            ["t10", "t20", "t30", "t40", "t50", "w50"]
+        );
+    }
+
+    #[test]
+    fn commands_at_the_same_moment_keep_their_given_order() {
+        // Two different commands, so a sort that swapped them would show.
+        let stop = Timed {
+            at_ms: 25,
+            command: Command::GroundStop {
+                reason: crate::Reason::Storm,
+            },
+        };
+        assert_eq!(
+            ticks(&script(vec![wind(25), stop.clone()], 10, 30)),
+            ["t10", "t20", "t25", "w25", "stop", "t30"]
+        );
+        assert_eq!(
+            ticks(&script(vec![stop, wind(25)], 10, 30)),
+            ["t10", "t20", "t25", "stop", "w25", "t30"]
+        );
+    }
+
+    #[test]
+    fn an_empty_scenario_ends_where_it_starts() {
+        let result = run(&Scenario {
+            airport: AirportConfig::demo(),
+            commands: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(result.start, result.end);
+        assert!(result.outputs.is_empty());
+    }
+
+    #[test]
+    fn stats_add_up_to_the_outputs() {
+        let result = run(&demo(1, 6, 40, 40)).unwrap();
+        let (mut arrivals, mut departures) = (0, 0);
+        for output in &result.outputs {
+            match output {
+                Output::Landed { delay_ms, .. } => arrivals += delay_ms,
+                Output::Departed { delay_ms, .. } => departures += delay_ms,
+                _ => {}
+            }
+        }
+        assert_eq!(result.end.stats.arrival_delay_ms, arrivals);
+        assert_eq!(result.end.stats.departure_delay_ms, departures);
+    }
+
+    #[test]
+    fn a_run_result_survives_json() {
+        let result = run(&demo(3, 1, 20, 20)).unwrap();
+        let json = serde_json::to_string(&result).unwrap();
+        let back: RunResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, result);
     }
 
     #[test]

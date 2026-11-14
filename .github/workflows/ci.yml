@@ -28,6 +28,14 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # Release keeps overflow checks on, so the browser stops where debug
+      # does; `ms_addition_panics_on_overflow` proves it.
+      - run: cargo test --release -p det
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      # The ban list still catches one of each banned item.
+      - run: just check-ban
 
   web:
     name: Web (wasm, typecheck, test, build)

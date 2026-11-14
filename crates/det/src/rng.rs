@@ -1,5 +1,5 @@
 //! The one seeded random number generator (design section 4). The algorithm
-//! is written out here, xoshiro256** seeded through SplitMix64, so that no
+//! is written out here, xoshiro256** seeded through `SplitMix64`, so that no
 //! library update can change the sequence a seed produces.
 
 /// A seeded generator. The same seed always gives the same sequence.
@@ -9,6 +9,11 @@ pub struct Rng {
 }
 
 impl Rng {
+    /// A generator whose sequence is fixed by `seed`.
+    ///
+    /// # Panics
+    /// Never, unless the seeding code is broken and produces the all-zero
+    /// state, from which xoshiro never leaves.
     #[must_use]
     pub fn new(seed: u64) -> Self {
         let mut x = seed;
@@ -19,11 +24,14 @@ impl Rng {
             z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
             z ^ (z >> 31)
         };
-        Self {
-            s: [next(), next(), next(), next()],
-        }
+        let s = [next(), next(), next(), next()];
+        // The all-zero state is the one xoshiro never leaves. SplitMix64
+        // cannot produce it, so this is a check on the code above.
+        assert_ne!(s, [0; 4], "Rng::new: all-zero state from seed {seed}");
+        Self { s }
     }
 
+    /// The next value in the sequence, uniform over all of `u64`.
     pub fn next_u64(&mut self) -> u64 {
         let result = self.s[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
         let t = self.s[1] << 17;
@@ -37,6 +45,14 @@ impl Rng {
     }
 
     /// A uniform value in `0..n`, without bias. Returns 0 when `n` is 0.
+    ///
+    /// # Panics
+    /// Never, unless the method itself is broken and the result is not
+    /// below `n`.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Lemire's method compares the low 64 bits of the product"
+    )]
     pub fn below(&mut self, n: u64) -> u64 {
         if n == 0 {
             return 0;
@@ -47,7 +63,9 @@ impl Rng {
         loop {
             let m = u128::from(self.next_u64()) * u128::from(n);
             if (m as u64) >= threshold {
-                return (m >> 64) as u64;
+                let result = (m >> 64) as u64;
+                assert!(result < n, "Rng::below({n}) gave {result}");
+                return result;
             }
         }
     }
@@ -75,5 +93,51 @@ mod tests {
             }
         }
         assert_eq!(rng.below(0), 0);
+    }
+
+    #[test]
+    fn below_sequence_is_pinned() {
+        // Traffic is drawn with `below`, so a change here changes every
+        // recorded seed's flights.
+        let mut rng = Rng::new(42);
+        let values: Vec<u64> = (0..8).map(|_| rng.below(10)).collect();
+        assert_eq!(values, [0, 3, 6, 9, 9, 7, 7, 8]);
+    }
+
+    #[test]
+    fn below_one_is_always_zero() {
+        let mut rng = Rng::new(3);
+        assert!((0..100).all(|_| rng.below(1) == 0));
+    }
+
+    #[test]
+    fn below_is_roughly_uniform() {
+        // The seed is fixed, so this cannot flake.
+        let mut rng = Rng::new(7);
+        let mut counts = [0u32; 3];
+        for _ in 0..3_000 {
+            counts[usize::try_from(rng.below(3)).unwrap()] += 1;
+        }
+        assert_eq!(counts, [1021, 936, 1043]);
+        assert!(counts.iter().all(|c| (900..1100).contains(c)));
+    }
+
+    #[test]
+    fn a_clone_continues_the_same_sequence() {
+        let mut rng = Rng::new(9);
+        for _ in 0..5 {
+            rng.next_u64();
+        }
+        let mut copy = rng.clone();
+        let a: Vec<u64> = (0..5).map(|_| rng.next_u64()).collect();
+        let b: Vec<u64> = (0..5).map(|_| copy.next_u64()).collect();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn different_seeds_give_different_sequences() {
+        let firsts: std::collections::BTreeSet<u64> =
+            (0..100).map(|seed| Rng::new(seed).next_u64()).collect();
+        assert_eq!(firsts.len(), 100);
     }
 }

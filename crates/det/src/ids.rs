@@ -15,7 +15,7 @@
 //!
 //! All of them serialise as the bare number.
 
-use std::fmt;
+use std::{fmt, ops::Add};
 
 use serde::{Deserialize, Serialize};
 
@@ -37,17 +37,19 @@ macro_rules! id {
 }
 
 id! {
-    /// One participant in Raft.
+    /// The address of one node, such as a replica. A Raft member is
+    /// named by the id of the replica that runs it.
     NodeId(u32)
 }
 
 id! {
-    /// Anything that sends commands to the airport group and waits for replies.
+    /// Anything that sends commands to an airport group and waits for
+    /// replies: whichever node holds a group client for it.
     ClientId(u32)
 }
 
 id! {
-    /// An election term (Raft's "term"). 0 is the term of a brand new node,
+    /// An election term (Raft's "term"). 0 is the term of a brand new member,
     /// before any election.
     Term(u64)
 }
@@ -56,6 +58,25 @@ id! {
     /// A position in a log. Positions start at 1; 0 means "before the first
     /// entry".
     Index(u64)
+}
+
+id! {
+    /// A timestamp provided with each message.
+    Ms(u64)
+}
+
+impl From<Ms> for u64 {
+    fn from(val: Ms) -> Self {
+        val.0
+    }
+}
+
+impl Add for Ms {
+    fn add(self, rhs: Self) -> Self::Output {
+        Ms(self.0.checked_add(rhs.0).expect("simulated time overflow"))
+    }
+
+    type Output = Ms;
 }
 
 #[cfg(test)]
@@ -77,5 +98,22 @@ mod tests {
         assert!(Index(10) > Index(9));
         assert_eq!(fingerprint(&Term(5)), fingerprint(&5u64));
         assert_eq!(fingerprint(&NodeId(5)), fingerprint(&5u32));
+    }
+
+    #[test]
+    fn ms_adds_and_displays() {
+        let sum = Ms(2) + Ms(3);
+        assert_eq!(sum, Ms(5));
+        assert_eq!(sum.to_string(), "5");
+        assert_eq!(u64::from(sum), 5);
+        assert_eq!(serde_json::to_string(&sum).unwrap(), "5");
+    }
+
+    /// Release builds keep overflow checks on, and this uses `checked_add`
+    /// anyway, so it panics in both (run `cargo test --release` to see).
+    #[test]
+    #[should_panic(expected = "simulated time overflow")]
+    fn ms_addition_panics_on_overflow() {
+        let _ = Ms(u64::MAX) + Ms(1);
     }
 }

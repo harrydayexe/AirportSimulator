@@ -3,6 +3,9 @@
 
 use std::hash::{Hash, Hasher};
 
+// `write_usize` widens to `u64`; that loses nothing only if a `usize` fits.
+const _: () = assert!(size_of::<usize>() <= 8);
+
 /// 64-bit FNV-1a, with every integer written as a fixed-width little-endian
 /// value so that a 32-bit browser and a 64-bit laptop agree.
 pub struct Fnv1a(u64);
@@ -11,6 +14,7 @@ impl Fnv1a {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
 
+    /// A hasher in the standard FNV-1a starting state.
     #[must_use]
     pub const fn new() -> Self {
         Self(Self::OFFSET)
@@ -90,11 +94,36 @@ mod tests {
         assert_eq!(h.finish(), 0xaf63_dc4c_8601_ec8c);
         let mut h = Fnv1a::new();
         h.write(b"foobar");
-        assert_eq!(h.finish(), 0x85944171f73967e8);
+        assert_eq!(h.finish(), 0x8594_4171_f739_67e8);
     }
 
     #[test]
     fn usize_hashes_like_u64() {
         assert_eq!(fingerprint(&7usize), fingerprint(&7u64));
+    }
+
+    #[test]
+    fn integers_hash_at_their_own_width() {
+        assert_eq!(fingerprint(&1u32), 0xad2a_ca77_4798_5764);
+        assert_ne!(fingerprint(&1u32), fingerprint(&1u64));
+    }
+
+    #[test]
+    fn a_tuple_hashes_its_fields_in_order() {
+        // FNV-1a of the bytes 01 02 00.
+        assert_eq!(fingerprint(&(1u8, 2u16)), 0xd0aa_6318_672c_f75e);
+    }
+
+    #[test]
+    fn isize_hashes_like_i64() {
+        assert_eq!(fingerprint(&-1isize), 0x8cf5_1a8b_fca3_883d);
+        assert_eq!(fingerprint(&-1isize), fingerprint(&-1i64));
+    }
+
+    #[test]
+    fn a_vec_hashes_its_length_as_eight_bytes() {
+        // This is the value a 32-bit machine would get wrong if
+        // `write_usize` were ever removed.
+        assert_eq!(fingerprint(&vec![1u8, 2]), 0x9b19_e1d3_2794_4d90);
     }
 }

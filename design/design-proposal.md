@@ -35,19 +35,20 @@ Three things about it matter for this proposal:
 
 ## 3. The idea in plain terms
 
-The whole design uses nine words. They are defined here once, and each is re-explained in the section where it is first put to work.
+The whole design uses ten words. They are defined here once, and each is re-explained in the section where it is first put to work.
 
 | Word | Meaning |
 |---|---|
 | **Command** | One instruction or fact sent to an airport, such as "flight BA123 wants to land" or "runway 27L is closed". |
 | **State machine** | The airport's rule book as a program. Given the current situation and one command, it produces the new situation. It does nothing else. |
 | **Log** | The numbered list of every command an airport has received, in order. |
-| **Replica** | One running copy of an airport's logic, with its own memory and its own log. |
+| **Node** | One participant in the system: a replica, or a controller above several airports. Each node is written so that it could run on its own machine, and talks to the others only by messages. |
+| **Replica** | A node that is one running copy of an airport's logic, with its own memory and its own log. |
 | **Airport group** | Three replicas of the same airport. They keep identical logs, so they stay in identical states. |
 | **Region** | Several airport groups that are close together, such as the airports around one city. |
 | **Country** | Several regions. |
-| **Controller** | A participant that sits above a set of airports, regions or countries and passes events down to them. |
-| **Host** | The one real program. It runs every replica and every controller inside itself, and it plays the part of the network, the disks and the clock for all of them. |
+| **Controller** | A node that sits above a set of airports, regions or countries, such as the air traffic control for a region. It passes events down and makes the decisions no single airport can, such as where to divert a flight. |
+| **Host** | What runs one node: it carries the node's messages, tells it the time and keeps its saved state. A production host does this on a real machine. The simulated hosts all live in one program and share a fake network, fake disks and a fake clock. Where this proposal says "the host", it means that one program. |
 
 The picture below shows how these stack up. The names are only examples. Everything in the picture below the web app lives inside the host.
 
@@ -72,9 +73,11 @@ A simulator does not strictly need to survive crashes. The three copies are ther
 
 TigerBeetle is a database whose team tests it in an unusual way. They run a whole cluster of database servers inside one ordinary program, with a fake network, fake disks and a fake clock. Because everything is fake, they can make the network drop messages or a disk corrupt data on purpose, run years of simulated time in hours, and replay any failure exactly by reusing the same random seed. They also compiled that program to run in a web browser as a game.
 
-TigerBeetle does this for testing, and then ships the database to run on real machines. This proposal goes one step further and makes the fake-everything program the finished product. That program is the host from the table above.
+TigerBeetle does this for testing, and then ships the database to run on real machines. This project follows the same split. The nodes are built as a production system would be: each one could run on its own machine or in its own container. The fake-everything program that runs them all is the host from the table above. It is how the system is tested, and, compiled for the browser, it is the live demo. (An earlier version of this proposal made the host the finished product and the nodes mere objects inside it. The Phase 2 spec explains the change.)
 
 ### Why simulated, and not real containers
+
+The nodes could run in real containers, and the code is kept in a shape that allows it. The project still does its work in the host, for these reasons.
 
 - **The interesting part is all still there.** The replicas really do have separate memory, really do exchange messages, and really do have to agree while messages are lost and replicas crash. The logic that solves that is identical whether the network is real or fake.
 - **What is left out is operations work.** Container images, Kubernetes and network configuration are worth knowing, but they are a different skill, and they would take a large share of the effort while adding nothing to the simulation.
@@ -256,12 +259,15 @@ This is the hardest phase and the core of the project.
 
 **What you can show.** The web page gains a replica view: three boxes with messages moving between them, the current leader highlighted, and each replica's log position and state fingerprint shown. Typing in a seed plays that run, including one where the leader is crashed and a new one takes over.
 
+> [!note] Revised in the Phase 2 spec
+> The client's work (numbering and resending) is built as a reusable piece, the group client, held by whatever node commands an airport. Each node sits behind its own host, and a `node` crate holds the replica so that it does not depend on the simulation. See `design/phase-2-spec.md`.
+
 ### Phase 3: A controller and the interactive web app (medium)
 
 **Goal.** A web app that lets you interfere with a running airport group, not only watch it.
 
 **What gets built.**
-- **The controller.** A new kind of participant inside the host, sitting above the airport group. Events from the outside world go to the controller. It finds the group's current leader and passes the events on as commands, numbering each one and resending with the same number until it is acknowledged, as Phase 2 describes. It also sends the "the time is now X" commands that Rule 2 requires.
+- **The controller.** A new node, sitting above the airport group, where events from the outside world go. It holds the group client from Phase 2. It finds the group's current leader and passes the events on as commands, numbering each one and resending with the same number until it is acknowledged, as Phase 2 describes. It also sends the "the time is now X" commands that Rule 2 requires.
 - **A speed dial.** Pause, real time, or many times faster. This only changes how quickly the host works through its to-do list. It does not change the outcome.
 - **Buttons for the airport.** Send a thunderstorm, close a runway, change the wind, declare a ground stop.
 - **Buttons for the machinery.** Crash a replica, restart it, cut it off from the others, make the network slow or lossy.
@@ -362,8 +368,10 @@ airport-simulator/
 ├── justfile        everyday commands for the whole repository
 ├── crates/         the Rust components
 │   ├── airport/    the airport state machine (Phase 1)
+│   ├── det/        deterministic tools shared by everything
 │   ├── raft/       the agreement logic (Phase 2)
-│   ├── host/       fake network, disks, clock, faults, checkers (Phase 2)
+│   ├── node/       the replica and the group client: the system itself (Phase 2)
+│   ├── host/       the simulated hosts: fake network, disks, clock, faults, checkers (Phase 2)
 │   ├── cli/        command-line program for bulk seeded runs
 │   └── wasm/       thin wrapper that exposes the host to the browser
 ├── web/            the React web app
@@ -388,7 +396,7 @@ The point of the split is that each component depends only on the ones above it 
 
 These are left out so that the distributed-systems work stays the focus.
 
-- Real networks, containers and Kubernetes.
+- Deploying to real networks, containers and Kubernetes. The nodes are written so that they could be, and the Phase 2 spec has an optional ticket for a production host, but nothing depends on it.
 - A server behind the web app. The host runs in the page.
 - Realistic airspace: routes, holding patterns, altitude, separation in the air.
 - Reduced separations that depend on weather, special procedures or newer regional schemes. The standard international minimums are used throughout.

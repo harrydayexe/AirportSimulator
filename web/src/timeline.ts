@@ -70,7 +70,7 @@ export function buildTimeline(airport: AirportConfig, result: RunResult): Timeli
   const diversions: Timeline["diversions"] = [];
   const notes: Note[] = [];
   const changes: [number, number][] = [];
-  const hold = airport.max_arrival_hold_ms ?? 0;
+  const hold = airport.max_arrival_hold_ms;
 
   const lane = (runway: string): number => {
     const i = laneOf.get(runway);
@@ -107,6 +107,8 @@ export function buildTimeline(airport: AirportConfig, result: RunResult): Timeli
         changes.push([o.at_ms - o.delay_ms, 1], [o.at_ms, -1]);
         break;
       case "diverted":
+        // Only a hold limit makes a flight divert.
+        if (hold === null) throw new Error(`${o.flight} diverted at an airport with no hold limit`);
         diversions.push({ flight: o.flight, atMs: o.at_ms });
         changes.push([o.at_ms - hold, 1], [o.at_ms, -1]);
         break;
@@ -176,18 +178,25 @@ export function buildTimeline(airport: AirportConfig, result: RunResult): Timeli
   let count = 0;
   let maxWaiting = 0;
   for (const [atMs, delta] of changes) {
+    // Once every change at the previous instant is in, nobody can have
+    // stopped waiting before they started.
+    const last = waiting[waiting.length - 1];
+    if (last && last.atMs !== atMs && last.waiting < 0) {
+      throw new Error(`${last.waiting} flights waiting at ${clock(last.atMs)}`);
+    }
     count += delta;
     maxWaiting = Math.max(maxWaiting, count);
-    const last = waiting[waiting.length - 1];
     if (last && last.atMs === atMs) last.waiting = count;
     else waiting.push({ atMs, waiting: count });
   }
+  const final = waiting[waiting.length - 1];
+  if (final && final.waiting < 0) throw new Error(`${final.waiting} flights waiting at the end`);
 
   return { endMs, lanes, stops, diversions, notes, waiting, maxWaiting };
 }
 
 /** The parts of `band` not covered by any of `holes`. */
-function subtract(band: Band, holes: Band[]): Band[] {
+export function subtract(band: Band, holes: Band[]): Band[] {
   let parts = [band];
   for (const hole of holes) {
     parts = parts.flatMap((p) => {

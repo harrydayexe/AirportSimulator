@@ -5,16 +5,18 @@ use host::DemoOptions;
 use wasm_bindgen::prelude::{JsError, wasm_bindgen};
 
 /// The demonstration scenario as JSON. See `host::demo_scenario_json`.
+/// `seed` is a full `u64` (a `bigint` in JavaScript), so any seed the
+/// command line prints can be replayed in the browser.
 #[wasm_bindgen(js_name = demoScenario)]
 #[must_use]
 pub fn demo_scenario(
-    seed: u32,
+    seed: u64,
     hours: u32,
     arrivals_per_hour: u32,
     departures_per_hour: u32,
 ) -> String {
     host::demo_scenario_json(DemoOptions {
-        seed: u64::from(seed),
+        seed,
         hours,
         arrivals_per_hour,
         departures_per_hour,

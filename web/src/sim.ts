@@ -85,7 +85,8 @@ export interface RunResult {
 }
 
 export interface DemoOptions {
-  seed: number;
+  /** Any `u64`, so a seed printed by the command line can be replayed here. */
+  seed: bigint;
   hours: number;
   arrivalsPerHour: number;
   departuresPerHour: number;

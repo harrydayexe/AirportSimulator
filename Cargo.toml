@@ -13,6 +13,7 @@ license = "MIT"
 det = { path = "crates/det" }
 airport = { path = "crates/airport" }
 raft = { path = "crates/raft" }
+node = { path = "crates/node" }
 host = { path = "crates/host" }
 # Pinned exactly: the wasm-bindgen CLI (see justfile and CI) must match this version.
 wasm-bindgen = "=0.2.130"
@@ -23,8 +24,11 @@ serde_json = "1"
 # Banned paths live in clippy.toml.
 [workspace.lints.rust]
 unsafe_code = "forbid"
+missing_docs = "warn"
 
 [workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
 disallowed_methods = "deny"
 disallowed_types = "deny"
 disallowed_macros = "deny"
@@ -33,3 +37,6 @@ float_arithmetic = "deny"
 [profile.release]
 opt-level = "s"
 lto = true
+# Debug panics on integer overflow; without this, release (and so the browser) would
+# silently wrap instead, and the two builds would disagree.
+overflow-checks = true
