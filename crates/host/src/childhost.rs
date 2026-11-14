@@ -1,15 +1,15 @@
 //! A [`ChildHost`] is a host which runs a group of nodes, but never moves time by itself.
 //! This is never the top level node used by a program.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use det::{Config, Input, Ms, NodeId};
+use det::{Config, Durable, Effect, Input, Ms, NodeId, Term};
 use raft::{browser_node::BrowserNode, node::Node};
 
 use crate::{
     event::{Event, Report},
     host::Host,
     queue::EventQueue,
-    seeds::Seeds,
+    seeds::{Seeds, Stream},
 };
 
 /// Runs a group of nodes and their queue. Never moves time by itself.
@@ -46,26 +46,93 @@ impl<C: Clone + Eq, N: Node<C>> ChildHost<C, N> {
         cluster: &[NodeId],
         now: Ms,
     ) -> Self {
-        todo!()
+        let mut nodes: BTreeMap<NodeId, N> = BTreeMap::new();
+        let queue: EventQueue<Event<C>> = EventQueue::new();
+        let scheduled_wake: BTreeMap<NodeId, Ms> = BTreeMap::new();
+        let cluster_set: BTreeSet<NodeId> = cluster.iter().copied().collect();
+
+        for id in here {
+            let peers: Vec<NodeId> = cluster_set.iter().copied().filter(|n| n != id).collect();
+
+            let rng = seeds.rng(Stream::Node { id: *id, life: 0 });
+            let node = N::new(
+                *id,
+                peers,
+                config,
+                Durable::new(Term(0), None, Vec::new()),
+                rng,
+                now,
+            );
+            nodes.insert(*id, node);
+        }
+
+        let mut host = Self {
+            nodes,
+            queue,
+            scheduled_wake,
+            last_now: now,
+            seeds,
+            config,
+            delay,
+        };
+
+        for id in here {
+            host.reschedule_wake(*id);
+        }
+
+        host
     }
 
     /// Step one node and turn what it returns into events and reports.
-    fn step_node(&mut self, now: Ms, id: NodeId, input: Input<C>, reports: Vec<Report<C>>) {
-        // 1. If `id` is not in `nodes` (crashed, from C3 on), drop the input.
-        // 2. effects = node.step(now, input)
-        // 3. For each effect:
-        //    Send { to, message } => if `to` is in `nodes`: queue.push(now + delay, Deliver { .. })
-        //                            else: reports.push(Outbound { at: now + delay, .. })
-        //    Committed { .. }     => reports.push(Committed { node: id, .. })
-        //    NotLeader { hint }   => reports.push(NotLeader { node: id, hint })
-        // 4. self.reschedule_wake(id)
-        todo!()
+    fn step_node(&mut self, now: Ms, id: NodeId, input: Input<C>, reports: &mut Vec<Report<C>>) {
+        // Crashed: drop the input
+        let Some(node) = self.nodes.get_mut(&id) else {
+            return;
+        };
+        for effect in node.step(now, input) {
+            match effect {
+                Effect::Send { to, message } => {
+                    if self.nodes.contains_key(&to) {
+                        self.queue.push(
+                            now + self.delay,
+                            Event::Deliver {
+                                from: id,
+                                to,
+                                message,
+                            },
+                        );
+                    } else {
+                        reports.push(Report::Outbound {
+                            at: now + self.delay,
+                            from: id,
+                            to,
+                            message,
+                        });
+                    }
+                }
+                Effect::Committed { index, entry } => reports.push(Report::Committed {
+                    node: id,
+                    index,
+                    entry,
+                }),
+                Effect::NotLeader { hint } => reports.push(Report::NotLeader { node: id, hint }),
+            }
+        }
+        self.reschedule_wake(id);
     }
 
     /// If the node's `next_wake` differs from what is scheduled, push a new
     /// `Wake`. Old `Wake`s stay in the queue, and the node ignores them.
     fn reschedule_wake(&mut self, id: NodeId) {
-        todo!()
+        let Some(node) = self.nodes.get(&id) else {
+            return;
+        };
+        // Node wants no wake.
+        let Some(next) = node.next_wake() else { return };
+        if self.scheduled_wake.get(&id) != Some(&next) {
+            self.queue.push(next, Event::Wake { node: id });
+            self.scheduled_wake.insert(id, next);
+        }
     }
 }
 
@@ -75,11 +142,26 @@ impl<C: Clone + Eq, N: Node<C>> Host<C> for ChildHost<C, N> {
     }
 
     fn step(&mut self, now: Ms) -> Vec<Report<C>> {
-        todo!()
+        assert!(now >= self.last_now);
+        assert_eq!(Some(now), self.next_event_at());
+        let (_, event) = self.queue.pop().unwrap();
+        let mut reports: Vec<Report<C>> = vec![];
+        match event {
+            Event::Wake { node } => self.step_node(now, node, Input::Wake, &mut reports),
+            Event::Deliver { from, to, message } => {
+                self.step_node(now, to, Input::Message { from, message }, &mut reports);
+            }
+            Event::Propose { to, command } => {
+                self.step_node(now, to, Input::Propose(command), &mut reports);
+            }
+        }
+
+        reports
     }
 
     fn inject(&mut self, at: Ms, event: Event<C>) {
-        todo!()
+        assert!(at >= self.last_now);
+        self.queue.push(at, event);
     }
 
     fn owns(&self, node: NodeId) -> bool {
