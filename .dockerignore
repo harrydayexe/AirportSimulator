@@ -1,0 +1,5 @@
+# The image is built from the Rust workspace alone.
+*
+!Cargo.toml
+!Cargo.lock
+!crates/

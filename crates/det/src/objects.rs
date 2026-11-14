@@ -2,10 +2,12 @@
 //! state that survives a crash, and a node's inputs and effects (Phase 2
 //! spec, ticket B1). `C` is the command type stored in the log.
 
+use serde::{Deserialize, Serialize};
+
 use crate::{Index, NodeId, Term};
 
 /// What a log entry carries.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Payload<C> {
     /// An empty entry a new leader adds in its own term so that entries left
     /// from earlier terms can be committed. Skipped when applying.
@@ -15,7 +17,7 @@ pub enum Payload<C> {
 }
 
 /// One position in the log.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Entry<C> {
     /// The election term of the leader that added the entry.
     pub term: Term,
@@ -149,7 +151,7 @@ pub enum Role {
 
 /// A message between nodes. A placeholder until the election and log-copying
 /// messages are added.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Message<C> {
     /// The term number of the sender.
     pub term: Term,
@@ -177,6 +179,7 @@ impl<C> Message<C> {
             prev_index,
             prev_term,
             entries,
+            leader_commit: _,
         } = &self.command
         {
             assert_eq!(
@@ -197,11 +200,17 @@ impl<C> Message<C> {
 }
 
 /// The type of message sent between two nodes.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MessageCommand<C> {
     /// Requesting a vote for leader.
     /// Should grant if we have voted for them last, or not voted for anyone.
-    RequestVote,
+    RequestVote {
+        /// The position of the last entry in the candidate's log; 0 when it
+        /// is empty.
+        last_log_index: Index,
+        /// The term of that entry; 0 when the log is empty.
+        last_log_term: Term,
+    },
     /// A vote in our favour. Ignore if not a candidate, add the voter to a set and on majority
     /// become the leader
     VoteReply,
@@ -214,6 +223,9 @@ pub enum MessageCommand<C> {
         prev_term: Term,
         /// The list of entries from the leader.
         entries: Vec<Entry<C>>,
+        /// The leader's commit position. May be beyond what this message
+        /// covers (O5).
+        leader_commit: Index,
     },
     /// Reply from a follower to a leader after appending messages to it's log
     AppendReply {
@@ -230,7 +242,7 @@ impl<C> MessageCommand<C> {
     #[must_use]
     pub fn is_request(&self) -> bool {
         match self {
-            MessageCommand::RequestVote | MessageCommand::AppendEntries { .. } => true,
+            MessageCommand::RequestVote { .. } | MessageCommand::AppendEntries { .. } => true,
             MessageCommand::VoteReply | MessageCommand::AppendReply { .. } => false,
         }
     }
@@ -254,12 +266,17 @@ mod tests {
             prev_index: Index(0),
             prev_term: Term(0),
             entries: Vec::new(),
+            leader_commit: Index(0),
+        };
+        let vote = MessageCommand::<u8>::RequestVote {
+            last_log_index: Index(0),
+            last_log_term: Term(0),
         };
         let reply = MessageCommand::<u8>::AppendReply {
             success: true,
             last_match_index: Index(0),
         };
-        assert!(MessageCommand::<u8>::RequestVote.is_request());
+        assert!(vote.is_request());
         assert!(!MessageCommand::<u8>::VoteReply.is_request());
         assert!(append.is_request());
         assert!(!reply.is_request());

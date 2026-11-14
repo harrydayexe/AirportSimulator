@@ -4,9 +4,12 @@ use std::fmt::Write as _;
 use std::io::Read as _;
 use std::process::ExitCode;
 
-use host::DemoOptions;
 use host::airport::Output;
 use host::airport::scenario::RunResult;
+
+use crate::scenario::DemoOptions;
+
+mod scenario;
 
 const USAGE: &str = "\
 usage: airport-sim <command> [options]
@@ -81,15 +84,15 @@ fn run(args: &[String]) -> Result<String, String> {
     };
     let options = parse(rest)?;
     let scenario = match command.as_str() {
-        "gen" => return Ok(host::demo_scenario_json(options.demo) + "\n"),
-        "demo" => host::demo_scenario_json(options.demo),
+        "gen" => return Ok(scenario::demo_scenario_json(options.demo) + "\n"),
+        "demo" => scenario::demo_scenario_json(options.demo),
         "run" => read(options.file.as_deref())?,
         _ => return Err(USAGE.to_owned()),
     };
     if options.json {
-        return Ok(host::run_scenario_json(&scenario)? + "\n");
+        return Ok(scenario::run_scenario_json(&scenario)? + "\n");
     }
-    Ok(report(&host::run_scenario(&scenario)?, options.quiet))
+    Ok(report(&scenario::run_scenario(&scenario)?, options.quiet))
 }
 
 fn read(file: Option<&str>) -> Result<String, String> {
@@ -351,7 +354,7 @@ mod tests {
 
     #[test]
     fn gen_prints_the_scenario_the_host_builds() {
-        let expected = host::demo_scenario_json(DemoOptions {
+        let expected = scenario::demo_scenario_json(DemoOptions {
             seed: 7,
             ..DemoOptions::default()
         }) + "\n";
@@ -369,7 +372,7 @@ mod tests {
     #[test]
     fn a_mean_delay_with_no_flights_is_zero() {
         let empty = r#"{"airport":{"name":"X","runways":[{"low":"09","high":"27","heading_deg":90,"length_m":3000}]},"commands":[]}"#;
-        let result = host::run_scenario(empty).unwrap();
+        let result = scenario::run_scenario(empty).unwrap();
         let text = report(&result, true);
         assert!(text.contains("landed       0 (mean delay 0 s)"), "{text}");
         assert!(text.contains("departed     0 (mean delay 0 s)"), "{text}");

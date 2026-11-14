@@ -1,0 +1,160 @@
+{{- $fullname := include "airport-simulator.fullname" . -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "airport-simulator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  serviceName: {{ include "airport-simulator.peerService" . }}
+  # All at once: a replica is only ready once a leader is elected, which
+  # takes a majority, so starting them one by one would never finish.
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "airport-simulator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "airport-simulator.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- if or .Values.podAnnotations .Values.airport.config }}
+      annotations:
+        {{- if .Values.airport.config }}
+        checksum/airport: {{ .Values.airport.config | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if or (ne .Values.antiAffinity "none") .Values.affinity }}
+      affinity:
+        {{- if eq .Values.antiAffinity "required" }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: {{ .Values.topologyKey }}
+              labelSelector:
+                matchLabels:
+                  {{- include "airport-simulator.selectorLabels" . | nindent 18 }}
+        {{- else if eq .Values.antiAffinity "preferred" }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: {{ .Values.topologyKey }}
+                labelSelector:
+                  matchLabels:
+                    {{- include "airport-simulator.selectorLabels" . | nindent 20 }}
+        {{- end }}
+        {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: airport-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            # Pod <name>-0 is replica 1, <name>-1 is replica 2, and so on.
+            - name: AIRPORT_ID_FROM_HOSTNAME
+              value: "1"
+            - name: AIRPORT_PEERS
+              value: {{ include "airport-simulator.peers" . | quote }}
+            - name: AIRPORT_LISTEN_PEER
+              value: "0.0.0.0:{{ .Values.ports.peer }}"
+            - name: AIRPORT_LISTEN_CLIENT
+              value: "0.0.0.0:{{ .Values.ports.client }}"
+            - name: AIRPORT_DATA_DIR
+              value: /data
+            - name: AIRPORT_CONFIG
+              value: {{ ternary "/etc/airport/airport.json" .Values.airport.preset (not (empty .Values.airport.config)) | quote }}
+            - name: AIRPORT_HEARTBEAT_MS
+              value: {{ .Values.raft.heartbeatMs | quote }}
+            - name: AIRPORT_ELECTION_MS
+              value: {{ .Values.raft.electionMs | quote }}
+          ports:
+            - name: peer
+              containerPort: {{ .Values.ports.peer }}
+            - name: client
+              containerPort: {{ .Values.ports.client }}
+          # Alive: the replica's loop answers.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: client
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Ready: it knows who leads, so it can take a command or say
+          # where to send it.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: client
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 3
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            {{- if .Values.airport.config }}
+            - name: airport
+              mountPath: /etc/airport
+              readOnly: true
+            {{- end }}
+      {{- if or .Values.airport.config (not .Values.persistence.enabled) }}
+      volumes:
+        {{- if .Values.airport.config }}
+        - name: airport
+          configMap:
+            name: {{ $fullname }}
+        {{- end }}
+        {{- if not .Values.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "airport-simulator.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.accessModes | nindent 10 }}
+        {{- with .Values.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}

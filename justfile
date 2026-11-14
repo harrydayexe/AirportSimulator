@@ -57,6 +57,28 @@ dev: wasm
 run *args:
     cargo run -p airport-sim -- "$@"
 
+# Run one replica of the production server, e.g. `just server --id 1 --peers 1=127.0.0.1:7000`
+[group("run")]
+[positional-arguments]
+server *args:
+    cargo run --release -p airport-server -- "$@"
+
+# Build the production container image
+[group("build")]
+image:
+    docker build --tag ghcr.io/harrydayexe/airportsimulator:latest .
+
+# Run three replicas with Docker Compose (clients on localhost:8081 to 8083)
+[group("run")]
+up:
+    docker compose up --build
+
+# Lint and render the Helm chart
+[group("check")]
+check-chart:
+    helm lint --strict deploy/helm/airport-simulator
+    helm template airport deploy/helm/airport-simulator > /dev/null
+
 # Run all tests
 [group("test")]
 test: test-rust test-web

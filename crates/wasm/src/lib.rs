@@ -1,12 +1,15 @@
 //! WebAssembly bindings for the web app. Keep this layer thin: it converts
-//! types and forwards calls to the host, and holds no logic of its own.
+//! types and forwards calls, and holds no logic of its own.
 
-use host::DemoOptions;
+use host::airport::scenario::{self, Scenario};
 use wasm_bindgen::prelude::{JsError, wasm_bindgen};
 
-/// The demonstration scenario as JSON. See `host::demo_scenario_json`.
+/// The demonstration scenario (see `airport::scenario::demo`) as JSON.
 /// `seed` is a full `u64` (a `bigint` in JavaScript), so any seed the
 /// command line prints can be replayed in the browser.
+///
+/// # Panics
+/// Never: a `Scenario` always serialises.
 #[wasm_bindgen(js_name = demoScenario)]
 #[must_use]
 pub fn demo_scenario(
@@ -15,20 +18,20 @@ pub fn demo_scenario(
     arrivals_per_hour: u32,
     departures_per_hour: u32,
 ) -> String {
-    host::demo_scenario_json(DemoOptions {
-        seed,
-        hours,
-        arrivals_per_hour,
-        departures_per_hour,
-    })
+    let scenario = scenario::demo(seed, hours, arrivals_per_hour, departures_per_hour);
+    serde_json::to_string(&scenario).expect("a Scenario always serialises")
 }
 
-/// Runs a scenario given as JSON and returns the result as JSON. See
-/// `host::run_scenario_json`.
+/// Runs a scenario given as JSON through one airport (see
+/// `airport::scenario::run`) and returns the result as JSON.
 ///
 /// # Errors
 /// Throws if the JSON is not a scenario or its airport is invalid.
 #[wasm_bindgen(js_name = runScenario)]
 pub fn run_scenario(scenario_json: &str) -> Result<String, JsError> {
-    host::run_scenario_json(scenario_json).map_err(|message| JsError::new(&message))
+    let scenario: Scenario = serde_json::from_str(scenario_json)
+        .map_err(|e| JsError::new(&format!("invalid scenario: {e}")))?;
+    let result =
+        scenario::run(&scenario).map_err(|e| JsError::new(&format!("invalid airport: {e}")))?;
+    serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }

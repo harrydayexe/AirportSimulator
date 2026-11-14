@@ -66,3 +66,24 @@ jobs:
           name: web-dist
           path: web/dist
           retention-days: 7
+
+  deploy:
+    name: Deploy (image, compose, chart)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker compose config --quiet
+      - run: docker build --tag airport-simulator:ci .
+      # The image starts, knows its own version, and refuses bad options.
+      - run: docker run --rm airport-simulator:ci --version
+      - run: helm lint --strict deploy/helm/airport-simulator
+      # Renders with the defaults and with every optional part switched on.
+      - run: helm template airport deploy/helm/airport-simulator > /dev/null
+      - run: |
+          echo '{"name":"X","runways":[]}' > airport.json
+          helm template airport deploy/helm/airport-simulator \
+            --set replicaCount=5 \
+            --set antiAffinity=preferred \
+            --set persistence.enabled=false \
+            --set-file airport.config=airport.json \
+            > /dev/null

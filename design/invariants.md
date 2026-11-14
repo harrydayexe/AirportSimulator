@@ -173,7 +173,7 @@ Written for the field types the spec's section 11.11 asks for (`prev_term: Term`
 | S1 | `Seeds::rng` | CONST | The three stream tags (1, 2, 3) are distinct. Make them named constants and `const`-assert it. Independence of streams cannot be asserted cheaply; it is a test (H-S cases). |
 | S2 | `Seeds::child` | POST | `child(i).root != self.root`. A child sharing its parent's root would replay the parent's network stream. |
 | S3 | `mix` | — | Pure, no invariant. Note that the doc comment says "SplitMix64 finaliser" but all three multiplications use `GOLDEN`; SplitMix64 uses `0xbf58476d1ce4e5b9` and `0x94d049bb133111eb`. Either is deterministic. Pin whichever you keep (test H-M1). |
-| L1 | `demo_scenario_json` | POST | Serialising a `Scenario` cannot fail, so `unwrap_or_default()` turning a failure into `""` hides an impossible state. Use `expect`. |
+| L1 | `demo_scenario_json` (now in `crates/cli/src/scenario.rs`) | POST | Serialising a `Scenario` cannot fail, so `unwrap_or_default()` turning a failure into `""` hides an impossible state. Use `expect`. |
 
 ### Not written yet (from spec section 11, for when the code lands)
 

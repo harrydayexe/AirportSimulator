@@ -172,7 +172,7 @@ impl<C: Clone + Eq> BrowserNode<C> {
 
         let mut effects = vec![];
         match message.command {
-            MessageCommand::RequestVote => {
+            MessageCommand::RequestVote { .. } => {
                 // TODO: also require the candidate's log to be at least as up
                 // to date as ours (spec 10.4).
                 if self.voted_for.is_none_or(|v| v == from) {
@@ -460,6 +460,13 @@ mod tests {
         }
     }
 
+    fn request_vote() -> MessageCommand<u32> {
+        MessageCommand::RequestVote {
+            last_log_index: det::Index(0),
+            last_log_term: Term(0),
+        }
+    }
+
     #[test]
     fn a_new_node_has_an_election_deadline_to_wake_for() {
         let n = node(0, None);
@@ -494,7 +501,7 @@ mod tests {
     #[test]
     fn a_higher_term_names_no_leader() {
         let mut n = node(1, None);
-        let effects = n.step(Ms(1_001), message(2, 4, MessageCommand::RequestVote));
+        let effects = n.step(Ms(1_001), message(2, 4, request_vote()));
         assert_eq!(n.term, Term(4));
         assert_eq!(n.leader_hint, None, "N21: the sender is only a candidate");
         assert_eq!(n.voted_for, Some(NodeId(2)));
@@ -510,10 +517,7 @@ mod tests {
     #[test]
     fn one_vote_per_term() {
         let mut n = node(4, Some(2));
-        assert!(
-            n.step(Ms(1_001), message(3, 4, MessageCommand::RequestVote))
-                .is_empty()
-        );
+        assert!(n.step(Ms(1_001), message(3, 4, request_vote())).is_empty());
         assert_eq!(n.voted_for, Some(NodeId(2)));
     }
 

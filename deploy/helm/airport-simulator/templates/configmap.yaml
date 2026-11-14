@@ -1,0 +1,10 @@
+{{- if .Values.airport.config }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "airport-simulator.fullname" . }}
+  labels:
+    {{- include "airport-simulator.labels" . | nindent 4 }}
+data:
+  airport.json: {{ .Values.airport.config | quote }}
+{{- end }}

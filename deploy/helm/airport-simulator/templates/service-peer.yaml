@@ -1,0 +1,20 @@
+# Headless: gives each replica a stable DNS name for the others to dial.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "airport-simulator.peerService" . }}
+  labels:
+    {{- include "airport-simulator.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  # Replicas must find each other before any of them can be ready.
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "airport-simulator.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: peer
+      port: {{ .Values.ports.peer }}
+      targetPort: peer
+    - name: client
+      port: {{ .Values.ports.client }}
+      targetPort: client
