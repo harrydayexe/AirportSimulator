@@ -37,14 +37,14 @@ macro_rules! id {
 }
 
 id! {
-    /// The address of one node: a replica or a controller. A Raft member is
+    /// The address of one node, such as a replica. A Raft member is
     /// named by the id of the replica that runs it.
     NodeId(u32)
 }
 
 id! {
     /// Anything that sends commands to an airport group and waits for
-    /// replies. In practice the controller that owns the group.
+    /// replies: whichever node holds a group client for it.
     ClientId(u32)
 }
 

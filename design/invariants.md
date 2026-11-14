@@ -4,7 +4,7 @@ Reviewed at commit `dead33d` plus the uncommitted `host/src/{hash,seeds}.rs`, ag
 
 I built a scratch copy with Rust 1.97.0 and ran it. All 78 existing Rust tests pass. Where this document says **fires today**, I confirmed the behaviour with a throwaway probe test on that copy; nothing in your repo was touched.
 
-> **Vocabulary, since the second revision of the Phase 2 spec.** A *node* is now any participant in the protocol (a replica or a controller), and the Raft participant inside a replica is a *member* (`raft::Member`, formerly `BrowserNode`). The N-numbered invariants below are the member's; their IDs are unchanged. Where older text in this document says "node" about Raft, read "member". The host is now one flat `Host`, so the entries for `ChildHost` and `BrowserHost` in section 6 have been replaced.
+> **Vocabulary, since the Phase 2 spec was revised.** A *node* is now any participant in the protocol (in Phase 2, a replica), and the Raft participant inside a replica is a *member* (`raft::Member`, formerly `BrowserNode`). The N-numbered invariants below are the member's; their IDs are unchanged. Where older text in this document says "node" about Raft, read "member". Every node now has its own host (`SimHost`), and the hosts share one `Sim`, so the entries for `ChildHost` and `BrowserHost` in section 6 have been replaced.
 
 ## 1. Ground rules
 
@@ -177,30 +177,31 @@ Written for the field types the spec's section 11.11 asks for (`prev_term: Term`
 | S3 | `mix` | — | Pure, no invariant. Note that the doc comment says "SplitMix64 finaliser" but all three multiplications use `GOLDEN`; SplitMix64 uses `0xbf58476d1ce4e5b9` and `0x94d049bb133111eb`. Either is deterministic. Pin whichever you keep (test H-M1). |
 | L1 | `demo_scenario_json` | POST | Serialising a `Scenario` cannot fail, so `unwrap_or_default()` turning a failure into `""` hides an impossible state. Use `expect`. |
 
-### `seeds.rs` after the second revision
+### `seeds.rs` after the revision
 
 S2 is retired: `Seeds::child` was removed with the nested hosts. Every generator in a run now comes straight from the one root, by `Stream`.
 
-### `host.rs` and the nodes (spec tickets A3, C2, C3, D1 to D4)
+### `sim.rs`, `host.rs` and the nodes (spec tickets A3, C2, C3, D1 to D4)
 
-H1, H3, H4 and H5 are asserted in `Host` today. The rest are for when the code lands.
+H1, H3, H4 and H5 are asserted or held by construction today. The rest are for when the code lands.
 
 | ID | Function | Kind | Invariant |
 |---|---|---|---|
-| H1 | `Host::new` | PRE | No two nodes share a `NodeId`. |
-| H2 | `Host::step` | POST | The popped time is `>= clock.now()` (K1), and exactly one node is stepped per `Wake` or `Deliver`, or none if it is crashed. |
-| H3 | `Host::inject(at, ..)` | PRE | `at >= clock.now()`, and `event.target()` is a node this host was built with. |
-| H4 | `Host::step_node` | POST | Every `Send` has `to != id` and `to` a node this host was built with, and becomes zero, one or two `Deliver` events as the network decides. On the perfect network, exactly one. |
-| H5 | `Host::reschedule_wake` | POST | `scheduled_wake[id] == node.next_wake()` after the call, and any `Wake` pushed is at `>= now`. |
+| H1 | `Sim::new` | PRE | No two nodes share a `NodeId`. Every node has exactly one host. |
+| H2 | `Sim::step` | POST | The popped time is `>= clock.now()` (K1), and exactly one host is stepped per `Wake` or `Deliver`, or none if its node is crashed. |
+| H3 | `Sim::inject(at, ..)` | PRE | `at >= clock.now()`, and `event.target()` is a node this run was built with. |
+| H4 | `Sim::step_host` | POST | Every `Send` has `to != id` and `to` a node this run was built with, and becomes zero, one or two `Deliver` events as the network decides. On the perfect network, exactly one. |
+| H5 | `SimHost::wake_to_schedule` | POST | Returns `Some(t)` only when `t == node.next_wake()` and `t` differs from the last time returned. Any `Wake` the `Sim` then pushes is at `>= now`. |
 | H6 | `Node::step` (any node) | PRE | `now` is not earlier than the previous call's. |
-| H7 | Replica (D1) | PRE | A `Message::Raft` comes from a replica of its own group; anything else comes from its LocalController. Otherwise it is a routing bug in the sender. |
+| H7 | Replica (D1) | PRE | A `Message::Raft` comes from a replica of its own group. Otherwise it is a routing bug in the sender. |
 | H8 | Replica (D1) | INV | `next_wake()` equals its member's `next_wake()`. |
 | H9 | Replica (D1) | PRE | On `Committed { index }`: `index == last_applied + 1`. The airport is only ever changed here. |
-| H10 | Replica (D2) | PRE | `seq <= row + 1` for the client's row. A gap is a bug in the controller: the spec says fail loudly. |
-| H11 | LocalController (D3) | INV | At most one request outstanding, `seq` never decreases, and `Outputs` go to the parent in submission order, each once. |
-| H12 | Crash and restart (C3) | POST | The restarted node's durable state equals what the crashed node handed over, and `life` went up by exactly one. |
-| H13 | LocalController (D3) | PRE | A message comes from its parent or from one of the replicas it owns. |
+| H10 | Replica (D2) | PRE | `seq <= row + 1` for the client's row. A gap is a bug in the group client: the spec says fail loudly. |
+| H11 | Group client (D3) | INV | At most one request outstanding, `seq` never decreases, and `Done` is emitted in submission order, each once. |
+| H12 | Crash and restart (C3) | POST | The restarted node's durable state equals what its host kept from the crashed one, and `life` went up by exactly one. |
+| H13 | Group client (D3) | PRE | A reply comes from one of the replicas it was created with. |
 | H14 | Workspace | CONST | `det`, `airport`, `raft` and `node` do not depend on `host`. Checked by `just check` (A3). |
+| H15 | `SimHost` | INV | A host holds no clock, no queue and no reference to another host. Anything involving order or more than one node is the `Sim`'s. |
 
 ## 7. `airport` crate
 

@@ -1,24 +1,28 @@
 # AGENTS.md
 
 Airport Simulator is a deterministic, replicated airport simulator. It is built as a set of
-nodes that could each run on their own machine, and run in practice by one Rust program (the
-"host") on a simulated network, natively for seeded tests and as WebAssembly for the React
-demo. The full plan is in `design/design-proposal.md`; Phase 2 is in `design/phase-2-spec.md`.
+nodes that could each run on their own machine. Every node sits behind a host, and in practice
+all of them run in one Rust program on simulated hosts that share a fake network and clock,
+natively for seeded tests and as WebAssembly for the React demo. The full plan is in
+`design/design-proposal.md`; Phase 2 is in `design/phase-2-spec.md`.
 
 ## Vocabulary
 
-- **Node**: one participant in the protocol, either a replica or a controller. It has a
-  `NodeId`, takes inputs through `step` and returns effects, and never touches a clock,
-  network, disk or another node directly.
+- **Node**: one participant in the protocol. It has a `NodeId`, takes inputs through `step`
+  and returns effects, and never touches a clock, network, disk or another node directly.
 - **Replica**: a node holding one copy of an airport: the `Airport`, a Raft member and its log.
-- **Controller**: a node that owns the nodes below it (it knows their ids and speaks for them;
-  it never holds them in memory). A `LocalController` owns the three replicas of one airport.
-  An `AreaController` (Phase 4) owns several `LocalController`s.
+  It is the only node of the system in Phase 2.
 - **Raft member** (`raft::Member`): the agreement logic inside a replica. Not a node.
-- **Host**: the simulated runtime. Flat: one map of nodes, one queue, one clock.
+- **Host**: what runs one node: delivers its messages, wakes it, tells it the time, keeps its
+  durable state. `SimHost` is the simulated kind. A production host (one node per machine,
+  real sockets and clock) is optional ticket H6.
+- **`Sim`**: what the simulated hosts share: the one clock, the event queue, the fake network,
+  faults and checkers. It stands where the real network stands in production.
+- **Group client**: numbers commands, finds the leader, resends. Not a node; held by whatever
+  node commands an airport (the scenario driver now, region control in Phase 4).
 
-There is one implementation of every node; only the runtime differs between the demo and a
-real deployment. Never add a browser-only or simulator-only variant of anything in `raft` or
+There is one implementation of every node; only the host differs between the demo and a
+real deployment. Never add a browser-only or simulation-only variant of anything in `raft` or
 `node`, and never make those crates (or `det`, `airport`) depend on `host`.
 
 ## Structure
@@ -29,8 +33,8 @@ those listed before it: `det` holds the deterministic tools everything shares (t
 values a Raft member exchanges with its replica, such as `Durable`, `Input` and `Effect`); `airport`
 is the pure state machine and knows nothing of replicas,
 networks or browsers; `raft` is the hand-written agreement logic (`Member`); `node` holds the
-`Node` trait and, as Phase 2 lands, the replica and the `LocalController`; `host` runs every
-node with a fake network, disk and clock; `cli` (binary `airport-sim`) and `wasm` are thin
+`Node` trait and, as Phase 2 lands, the replica and the group client; `host` holds the
+simulated hosts (`SimHost` per node, `Sim` for the fake network, disk and clock they share); `cli` (binary `airport-sim`) and `wasm` are thin
 wrappers around `host` for bulk seeded runs and for the browser. `just wasm` compiles the
 `wasm` crate and writes JS bindings to `web/src/wasm/` (generated, not committed), which
 `web/src/sim.ts` loads.

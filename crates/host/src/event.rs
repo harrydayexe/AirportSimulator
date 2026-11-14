@@ -1,7 +1,7 @@
-//! Events represent something waiting in the host's queue.
+//! Events represent something waiting in the simulation's queue.
 use det::NodeId;
 
-/// Something waiting in the host's queue. `M` is what nodes send one another.
+/// Something waiting in the simulation's queue. `M` is what nodes send one another.
 #[derive(Debug)]
 pub enum Event<M> {
     /// Step `node` with `Input::Wake`.

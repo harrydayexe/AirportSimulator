@@ -42,13 +42,13 @@ The whole design uses ten words. They are defined here once, and each is re-expl
 | **Command** | One instruction or fact sent to an airport, such as "flight BA123 wants to land" or "runway 27L is closed". |
 | **State machine** | The airport's rule book as a program. Given the current situation and one command, it produces the new situation. It does nothing else. |
 | **Log** | The numbered list of every command an airport has received, in order. |
-| **Node** | One participant in the system: a replica or a controller. Each node is written so that it could run on its own machine, and talks to the others only by messages. |
+| **Node** | One participant in the system: a replica, or a controller above several airports. Each node is written so that it could run on its own machine, and talks to the others only by messages. |
 | **Replica** | A node that is one running copy of an airport's logic, with its own memory and its own log. |
 | **Airport group** | Three replicas of the same airport. They keep identical logs, so they stay in identical states. |
 | **Region** | Several airport groups that are close together, such as the airports around one city. |
 | **Country** | Several regions. |
-| **Controller** | A node that owns the nodes below it: three replicas of one airport (a local controller), or several controllers (a region, country or world controller). It passes events down to them and speaks for them to the level above. |
-| **Host** | The simulated runtime. One program that runs every node inside itself, and plays the part of the network, the disks and the clock for all of them. |
+| **Controller** | A node that sits above a set of airports, regions or countries, such as the air traffic control for a region. It passes events down and makes the decisions no single airport can, such as where to divert a flight. |
+| **Host** | What runs one node: it carries the node's messages, tells it the time and keeps its saved state. A production host does this on a real machine. The simulated hosts all live in one program and share a fake network, fake disks and a fake clock. Where this proposal says "the host", it means that one program. |
 
 The picture below shows how these stack up. The names are only examples. Everything in the picture below the web app lives inside the host.
 
@@ -260,14 +260,14 @@ This is the hardest phase and the core of the project.
 **What you can show.** The web page gains a replica view: three boxes with messages moving between them, the current leader highlighted, and each replica's log position and state fingerprint shown. Typing in a seed plays that run, including one where the leader is crashed and a new one takes over.
 
 > [!note] Revised in the Phase 2 spec
-> The "client" above is built as the airport's local controller, a node that owns the three replicas. See `design/phase-2-spec.md`, which also adds a `node` crate for the replica and the controllers so that they do not depend on the host.
+> The client's work (numbering and resending) is built as a reusable piece, the group client, held by whatever node commands an airport. Each node sits behind its own host, and a `node` crate holds the replica so that it does not depend on the simulation. See `design/phase-2-spec.md`.
 
 ### Phase 3: A controller and the interactive web app (medium)
 
 **Goal.** A web app that lets you interfere with a running airport group, not only watch it.
 
 **What gets built.**
-- **The controller.** The local controller already exists from Phase 2, where it numbers and resends commands for its airport group. Here it becomes the place events from the outside world go. It finds the group's current leader and passes the events on as commands, numbering each one and resending with the same number until it is acknowledged, as Phase 2 describes. It also sends the "the time is now X" commands that Rule 2 requires.
+- **The controller.** A new node, sitting above the airport group, where events from the outside world go. It holds the group client from Phase 2. It finds the group's current leader and passes the events on as commands, numbering each one and resending with the same number until it is acknowledged, as Phase 2 describes. It also sends the "the time is now X" commands that Rule 2 requires.
 - **A speed dial.** Pause, real time, or many times faster. This only changes how quickly the host works through its to-do list. It does not change the outcome.
 - **Buttons for the airport.** Send a thunderstorm, close a runway, change the wind, declare a ground stop.
 - **Buttons for the machinery.** Crash a replica, restart it, cut it off from the others, make the network slow or lossy.
@@ -370,8 +370,8 @@ airport-simulator/
 │   ├── airport/    the airport state machine (Phase 1)
 │   ├── det/        deterministic tools shared by everything
 │   ├── raft/       the agreement logic (Phase 2)
-│   ├── node/       the replica and the controllers: the system itself (Phase 2)
-│   ├── host/       the simulated runtime: fake network, disks, clock, faults, checkers (Phase 2)
+│   ├── node/       the replica and the group client: the system itself (Phase 2)
+│   ├── host/       the simulated hosts: fake network, disks, clock, faults, checkers (Phase 2)
 │   ├── cli/        command-line program for bulk seeded runs
 │   └── wasm/       thin wrapper that exposes the host to the browser
 ├── web/            the React web app
@@ -396,7 +396,7 @@ The point of the split is that each component depends only on the ones above it 
 
 These are left out so that the distributed-systems work stays the focus.
 
-- Deploying to real networks, containers and Kubernetes. The nodes are written so that they could be, and the Phase 2 spec has an optional ticket for a real runtime, but nothing depends on it.
+- Deploying to real networks, containers and Kubernetes. The nodes are written so that they could be, and the Phase 2 spec has an optional ticket for a production host, but nothing depends on it.
 - A server behind the web app. The host runs in the page.
 - Realistic airspace: routes, holding patterns, altitude, separation in the air.
 - Reduced separations that depend on weather, special procedures or newer regional schemes. The standard international minimums are used throughout.

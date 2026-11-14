@@ -12,7 +12,7 @@ pub enum Stream {
     Network,
     /// The fault schedule.
     Faults,
-    /// One life of one node (a replica or a controller).
+    /// One life of one node.
     Node {
         /// The ID of the node.
         id: NodeId,

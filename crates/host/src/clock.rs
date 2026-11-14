@@ -1,7 +1,7 @@
 //! Contains the definition of [`Clock`], the one true time.
 use det::Ms;
 
-/// The one simulated time, owned by the host. Nodes never see it: each
+/// The one simulated time, owned by the `Sim`. Nodes never see it: each
 /// `step` is told the time.
 #[derive(Debug, Default)]
 pub struct Clock {

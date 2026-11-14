@@ -1,6 +1,6 @@
 [package]
 name = "host"
-description = "The simulated runtime: fake network, disks, clock and faults; runs every node in one program."
+description = "The simulated hosts: one per node, sharing a fake network and clock; runs every node in one program."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

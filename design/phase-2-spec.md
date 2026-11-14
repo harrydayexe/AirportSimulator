@@ -1,8 +1,8 @@
-# Phase 2 spec: nodes, the host that simulates them, and three replicas that agree
+# Phase 2 spec: three replicas that agree, each behind a host
 
 This is the working document for Phase 2 of Airport Simulator. It has two parts: a short review of the repository, and a list of tickets for building Phase 2.
 
-It was revised once after work began, to change what a "node" is and to make every participant something that could run on its own machine. Section 2 says what changed and where the code stands. The tickets on GitHub (milestone "Phase 2") carry the same text as section 7.
+It was revised after work began, to change what a "node" and a "host" are and to make every participant something that could run on its own machine. Section 2 says what changed and where the code stands. The tickets on GitHub (milestone "Phase 2") carry the same text as section 7.
 
 ## 1. How to use this document
 
@@ -20,7 +20,7 @@ I read every file in the repository at commit `0190ecf`. I could not run the tes
 - **The airport is already the right shape for replication.** `Airport::apply(&Command) -> Vec<Output>` is the whole interface, and time only moves through `Command::AdvanceTime`. That is exactly what a replicated log needs to feed: one command in, a new state and some outputs out.
 - **Determinism is enforced, not just intended.** The Clippy ban list, the hand-written random number generator in `rng.rs`, the fixed-width fingerprint in `fingerprint.rs`, and the web test that runs the same scenario natively and as WebAssembly and demands identical output are all in place.
 - **The tests are the right kind.** `tests/rules.rs` shows its arithmetic, and `tests/invariants.rs` uses a checker that shares the data tables with the airport but none of its logic. Phase 2 uses that same idea for Raft.
-- **Time is just another command.** `AdvanceTime` goes through the log like everything else, so a delay in replicating a command cannot change what the airport decides, only when the replicas hear about it. Note that the result *does* depend on how often the clock ticks (see `the_tick_is_part_of_the_run` in `tests/rules.rs`): a coarse step can let a flight whose slot has already passed go before a later flight that a finer tick would have slipped in ahead of it. So the controller's tick is part of what defines a run, and Phase 3's controller must choose it deliberately.
+- **Time is just another command.** `AdvanceTime` goes through the log like everything else, so a delay in replicating a command cannot change what the airport decides, only when the replicas hear about it. Note that the result *does* depend on how often the clock ticks (see `the_tick_is_part_of_the_run` in `tests/rules.rs`): a coarse step can let a flight whose slot has already passed go before a later flight that a finer tick would have slipped in ahead of it. So the tick is part of what defines a run, and whatever sends the time in Phase 3 must choose it deliberately.
 - **Phase 1's finish line in the design proposal is met**, as far as reading can tell: same fingerprint in both builds, hand-worked rates for a flooded runway, and tests for all four modelled aspects of aviation.
 
 ### Six things Phase 2 has to deal with
@@ -34,96 +34,116 @@ These are not faults in Phase 1. They are the places where the existing code mee
 5. **The `host` crate is currently a pass-through.** It turns a scenario into a result with no replicas involved. Keep `run_scenario` exactly as it is: it becomes the reference answer.
 6. **The `raft` crate is empty apart from a comment**, so nothing needs undoing.
 
-### What changed in the second revision
+### What changed in the revision
 
 The first version of this spec treated the host as the finished product: one program, with replicas as objects inside it. The aim is now different.
 
-- **The system is built as if for production.** Every participant is a **node**: a replica, or a controller that owns the nodes below it. Each node is written so that it could run alone on its own machine or in its own container, talking to the others only by messages.
-- **The host is one way of running the nodes, not the system itself.** It is the simulated runtime: all the nodes in one program, on a fake network, with a fake clock and fake disks. Compiled natively it does the bulk seeded test runs. Compiled to WebAssembly it is the live demo in the browser. The nodes it runs are the same code a real deployment would run.
-- **"Node" no longer means "a participant in Raft".** That is now a **Raft member**, the agreement logic inside a replica. A node is any participant in the system's protocol.
-- **The client of Phase 2 is now a controller.** The first version had a "client" that existed only in the host. The thing that numbers commands, finds the leader and resends is really the airport's own controller, which the design proposal introduced in Phase 3. It is built now, as the `LocalController`, because it is the node that owns the three replicas.
+- **The system is built as if for production.** Every participant is a **node**, written so that it could run alone on its own machine, talking to the others only by messages. In Phase 2 the only node of the system is the replica.
+- **Every node sits behind a host.** The host is the node's whole contact with the outside world: it carries its messages, tells it the time and keeps its durable state. The node itself never touches a network, a clock or a disk.
+- **There are two kinds of host for the same nodes.** A production host runs one node on its own machine, over a real network, with the system clock. A simulated host does the same job with a fake network and a fake clock that every simulated host shares, so that a run can be replayed from a seed. The simulated kind runs natively for the bulk test runs and as WebAssembly for the browser demo. Phase 2 builds only the simulated kind.
+- **"Node" no longer means "a participant in Raft".** That is now a **Raft member**, the agreement logic inside a replica.
+- **There is no controller per airport.** The first version had a "client" that existed only in the host. Its real work (number each command, find the leader, resend until answered) is needed by anything that talks to an airport, so it is now a small reusable piece, the **group client**, and not a node. In Phase 2 the scenario driver holds one. In Phase 4 the region's air traffic control will hold one per airport.
 
-What this changed in the tickets: A3 is new; B1 to B6 say "member" where they said "node"; C2 and C3 are restated for nodes of any kind; D1 moves out of the `host` crate; D3 becomes the `LocalController`; D4 (the scenario driver) is new; H6 is new.
+What this changed in the tickets: A3 is new; B1 to B6 say "member" where they said "node"; piece C is rebuilt around one host per node and a shared simulation; D1 moves out of the `host` crate; D3 becomes the group client; D4 (the scenario driver) is new; H6 is new.
 
 ### Where the code stands (after commit `8e511bb` and this revision)
 
 | Ticket | State |
 |---|---|
 | A1, A2 | Done. `det` holds `Rng`, the fingerprint and the identifier types (plus `Ms`). It also holds the values a Raft member exchanges with its replica (`Durable`, `Input`, `Effect`, `Message`). |
-| A3 | The `node` crate and the `Node` trait exist, as signatures only. The system's `Message` type does not. |
+| A3 | The `node` crate and the `Node` trait exist. The system's `Message` type does not. |
 | B1 | Mostly done. `raft::Member<C>` can be created, stepped and turned back into its `Durable`, with its invariants checked after every step. `Status` is still a placeholder with one variant. |
 | B2 | Started. The term rule, vote granting and vote counting are written. `start_election`, `become_leader` and `send_refusal` are `todo!()`. `RequestVote` does not yet carry the candidate's last log position and term, and a grant does not compare logs. |
 | B3 to B6 | Not started. `AppendEntries` and `AppendReply` exist as message shapes only. There is no commit position yet. |
-| C1 | Done: `Clock`, `EventQueue`, `Seeds` and the loop in `Host::step`, all tested. |
-| C2 | The host half is done: `host::Host<N>` runs any nodes on the perfect network and schedules their wakes, tested with two toy nodes. The second half of "done when" (three replicas elect a leader) waits for B2 and the first cut of D1. |
+| C1 | Done: `Clock`, `EventQueue`, `Seeds` and the loop in `Sim::step`, all tested. |
+| C2 | The host half is done: a `SimHost<N>` per node, plugged into one `Sim<N>` that plays the perfect network and schedules wakes, tested with two toy nodes. The second half of "done when" (three replicas elect a leader) waits for B2 and the first cut of D1. |
 | Everything else | Not started. |
 
-Two things were removed from the code in this revision, because they belonged to the old picture. The `raft::Node` trait with its `BrowserNode` implementation became the one concrete `raft::Member`: there must not be a browser version and a production version of the agreement logic, or the demo demonstrates nothing. The `Host` trait with `ChildHost` and `BrowserHost` (hosts nested inside hosts, each with its own queue) became the one flat `Host`: grouping is now the controllers' job, and a controller is a node, not a piece of the simulator. The event handling written for `ChildHost` was carried over into `Host` unchanged in substance. The one part with no new home yet is the loop that built each Raft participant with its peers and its generator: the host can no longer do that, because it does not know what kind of node it is running. It comes back as the run builder in ticket D4.
+Three things in the code were reshaped in this revision, because they belonged to the old picture.
+
+- The `raft::Node` trait with its `BrowserNode` implementation became the one concrete `raft::Member`. There must not be a browser version and a production version of the agreement logic, or the demo demonstrates nothing. What differs between the two is the host, not the node.
+- The `Host` trait with `ChildHost` and `BrowserHost` (hosts nested inside hosts, each with its own queue) became `SimHost`, one per node, and `Sim`, the one network and clock they share. The event handling written for `ChildHost` was carried over unchanged in substance.
+- The loop in `ChildHost::new` that built each Raft participant with its peers and its generator has no home yet, because a host no longer knows what kind of node it runs. It comes back as the run builder in ticket D4.
 
 ## 3. Phase 2 on one page
 
-**The goal.** Three copies of one airport, owned by one controller, that stay identical while the network loses messages and copies crash. All four are nodes that could each run on their own machine. In Phase 2 they run inside the host.
+**The goal.** Three copies of one airport that stay identical while the network loses messages and copies crash. Each copy is a node behind a host, and could run on its own machine. In Phase 2 all three run inside one simulation.
 
-**The words used in this document.** Several of these are new since the design proposal, and "node" has changed meaning since the first version of this spec.
+**The words used in this document.** Several of these are new since the design proposal, and "node" and "host" have changed meaning since the first version of this spec.
 
 | Word | Meaning |
 |---|---|
-| **Node** | One participant in the system's protocol: a replica or a controller. It has an address (`NodeId`), receives messages and wakes, and sends messages. It could run on its own machine. |
+| **Node** | One participant in the system's protocol. It has an address (`NodeId`), receives messages and wakes, and sends messages. It knows nothing of networks, clocks or disks. The replica is the only node of the system in Phase 2. |
 | **Replica** | A node that holds one copy of an airport: the airport, a Raft member with its log, and the bookkeeping that joins them. |
-| **Controller** | A node that owns one or more nodes below it. It is their only link to the rest of the system. |
-| **LocalController** | The controller of one airport. It owns that airport's three replicas, and turns commands from above into numbered requests to them. |
-| **AreaController** | A controller that owns several LocalControllers, for example the airports around one city. Phase 4. Named here only so that nothing in Phase 2 rules it out. |
-| **Owns** | Knows the addresses of, is the parent of, and speaks for. It never means "holds in memory": a controller reaches the nodes it owns only by sending messages. |
-| **Airport group** | The three replicas of one airport. Their Raft members form one Raft group. |
-| **Raft member** | The agreement logic inside one replica. It holds a log and takes part in elections. It knows nothing about airports or controllers. Called "node" in the first version of this spec. |
+| **Airport group** | The replicas of one airport, three in Phase 2. Their Raft members form one Raft group. |
+| **Raft member** | The agreement logic inside one replica. It holds a log and takes part in elections. It knows nothing about airports. Called "node" in the first version of this spec. |
+| **Host** | What runs one node. It delivers the node's messages, wakes it, tells it the time and keeps its durable state. Every node has exactly one. |
+| **Simulated host** | A host whose network and clock are fake and shared with every other simulated host (`SimHost`). Used for seeded tests and for the browser demo. |
+| **Production host** | A host for one node on its own machine: real sockets, the system clock, a file. Optional ticket H6. |
+| **Simulation** | What sits between the simulated hosts (`Sim`): the one clock, the one queue of events, the fake network and its faults. It stands where the real network stands in production. |
+| **Group client** | The piece of code that talks to an airport group: it numbers each command, finds the leader, and resends until answered. Not a node. Whatever node needs to command an airport holds one. |
+| **Client** | A node that holds a group client. In Phase 2, the driver. |
+| **Driver** | A node, in the simulation only, that plays a scenario's commands at the airport group and collects the answers. |
+| **Region control** | Phase 4. A node above several airports, the air traffic control for an area: it routes diversions and maydays, and passes flights from one airport to another. Named here only so that nothing in Phase 2 rules it out. It will hold one group client per airport. |
 | **Log** | A member's numbered list of entries. Positions start at 1. |
 | **Entry** | One item in a log: a command, plus the election term in which a leader first stored it. |
 | **Election term** | A counter that goes up every time any member starts an election. Raft calls this a "term". Every Raft message carries one. |
 | **Leader, follower, candidate** | The three roles a member can be in. At most one leader per election term. |
 | **Majority** | More than half of the members of a group. With three, two. |
 | **Committed** | An entry is committed once it is guaranteed never to be lost or replaced. Only committed entries are applied to the airport. |
-| **Client** | Whatever sends requests to an airport group and waits for replies. In this system that is the group's LocalController. |
-| **Runtime** | Whatever runs a node: it delivers its messages, wakes it, tells it the time and keeps its durable state. |
-| **Host** | The simulated runtime. One program that runs every node, and plays the network, the disks and the clock. It runs natively for bulk tests and as WebAssembly for the demo. |
-| **Driver** | A stand-in node, in the host only, that sits where the LocalController's parent would be. It plays a scenario's commands and collects the answers. |
-| **Checker** | Code in the host that inspects everything after every step and fails the run if a rule is broken. |
+| **Checker** | Code in the simulation that inspects everything after every step and fails the run if a rule is broken. |
 | **Seed** | The one number that all randomness in a run comes from. Same seed, same run. |
 
-**The picture.** Solid arrows are ownership. Dotted lines are Raft messages between the members. Every box inside the host is a node, and every line is a message on the fake network.
+**The picture.** A replica is the same in both setups. Only the host around it changes, and what the hosts are plugged into.
 
 ```mermaid
 flowchart TD
-    subgraph Host["The host: fake network, fake disks, clock, faults, checkers"]
-        Driver["Driver: plays a scenario's commands"]
-        LC["LocalController: numbers, sends, resends"]
-        subgraph R1["Replica 1"]
-            N1["Raft member"] --> A1["Airport"]
+    subgraph Prod["Production: one machine each"]
+        subgraph PH1["Production host"]
+            PR1["Replica 1: Raft member + Airport"]
         end
-        subgraph R2["Replica 2"]
-            N2["Raft member"] --> A2["Airport"]
+        subgraph PH2["Production host"]
+            PR2["Replica 2: Raft member + Airport"]
         end
-        subgraph R3["Replica 3"]
-            N3["Raft member"] --> A3["Airport"]
+        subgraph PH3["Production host"]
+            PR3["Replica 3: Raft member + Airport"]
         end
-        Driver --> LC
-        LC --> R1
-        LC --> R2
-        LC --> R3
+        Net(("Real network"))
+        PH1 <--> Net
+        PH2 <--> Net
+        PH3 <--> Net
     end
-    N1 <-.-> N2
-    N2 <-.-> N3
-    N1 <-.-> N3
+    subgraph Demo["Simulation: one program"]
+        subgraph SH0["Simulated host"]
+            D["Driver: group client + scenario"]
+        end
+        subgraph SH1["Simulated host"]
+            SR1["Replica 1: Raft member + Airport"]
+        end
+        subgraph SH2["Simulated host"]
+            SR2["Replica 2: Raft member + Airport"]
+        end
+        subgraph SH3["Simulated host"]
+            SR3["Replica 3: Raft member + Airport"]
+        end
+        Sim(("Sim: fake network, one clock, faults, checkers"))
+        SH0 <--> Sim
+        SH1 <--> Sim
+        SH2 <--> Sim
+        SH3 <--> Sim
+    end
 ```
 
-**The same nodes, two runtimes.**
+**What a host does for its node, in each setup.**
 
-| | The host (built in Phase 2) | A real runtime (optional ticket H6) |
+| | Simulated host (built in Phase 2) | Production host (optional ticket H6) |
 |---|---|---|
-| Where nodes live | All in one program | One per process, machine or container |
-| Network | An event queue with seeded delays and faults | Sockets |
-| Clock | A number the host advances | The machine's clock |
-| Disk | A struct the host keeps | A file |
-| Used for | Seeded tests, and the browser demo | Showing the nodes really are separable |
+| Where the node lives | In one program with all the others | Alone in a process, on its own machine or in its own container |
+| Messages | Handed to the `Sim`, which delays, drops or repeats them | Sockets |
+| Time | The `Sim`'s one clock, a number that jumps to the next event | The machine's clock |
+| Durable state | A struct the host keeps while the node is "crashed" | A file |
+| Who decides what happens next | The `Sim`, from a seed | The operating system and the network |
+| Used for | Seeded tests, and the browser demo | Running for real |
 
 The rule that keeps both possible: the crates that hold the nodes (`det`, `airport`, `raft`, `node`) never depend on `host`.
 
@@ -133,8 +153,8 @@ The rule that keeps both possible: the crates that hold the nodes (`det`, `airpo
 |---|---|---|
 | A. Groundwork | `crates/det`, `crates/node` | Shared tools, identifier types, and the `Node` trait. |
 | B. Raft | `crates/raft` | Elections, log copying, commitment. Pure logic. |
-| C. The host | `crates/host` | Event loop, fake network, fake disk, fault injection, trace. |
-| D. Replica and controller | `crates/node` (the driver in `crates/host`) | The replica, which joins Raft to the airport and filters duplicates, and the LocalController that owns three of them. |
+| C. The simulated host | `crates/host` | A host per node, and the simulation they share: event loop, fake network, fake disk, fault injection, trace. |
+| D. Replica and client | `crates/node` (the driver in `crates/host`) | The replica, which joins Raft to the airport and filters duplicates, and the group client that talks to three of them. |
 | E. Checkers | `crates/host` | The rules that must never break, and proof that the checkers work. |
 
 Pieces F (bulk runs and tooling) and G (the web view) are plumbing. Piece H is optional extras.
@@ -147,30 +167,31 @@ Each of these could have gone another way. They are fixed here so the tickets fi
 
 | Decision | Choice | Why |
 |---|---|---|
-| What a node may touch | Only its own state. Inputs come in through `step`, and everything it wants done goes out as effects. No clock, network, disk, threads or references to other nodes. | This is what lets one node run in the host and in a process of its own without a line changed. |
-| One implementation of each node | There is no browser version and production version of anything in `raft` or `node`. Only the runtime differs. | If the demo ran different logic from production, it would show nothing about production. |
-| How the host arranges nodes | Flat: one map of nodes, one queue, one clock. The tree of who owns whom lives in the nodes' own settings. | It is how a real network looks: separate machines with addresses. A controller cannot hold a queue for nodes on other machines. |
-| Who talks to whom | Replicas of a group send Raft messages straight to each other. Everything else goes up or down the tree: a replica hears from the outside only through its LocalController. | Raft traffic through a controller would make it a bottleneck and a single point of failure. |
-| How a node learns the time | Every input to a node carries the current time. The node says when it next needs waking. The same goes for a Raft member inside a replica. | The host is an event loop, so "wake me at time T" costs one event. A regular tick would cost events when nothing is happening. |
-| How Raft gets randomness | Each replica is given its own seeded generator when it is created, and passes it to its member. | Keeps the node pure, and the runtime stays in charge of the seed. |
-| How the fake disk works | A node keeps everything that must survive a crash in one struct. On a crash the host keeps that struct and throws the rest of the node away. | It makes "what survives a crash" impossible to get wrong by accident, and costs nothing at run time. Disks that fail come in Phase 5. |
-| When durable state is saved | The messages a node sends in one `step` leave only after its durable state at the end of that step is saved. In the host saving is instant, so this is free. | It is the promise Raft relies on (a vote is on disk before the reply is sent), stated so that a real runtime knows what it must do. |
-| What Raft stores | Raft is generic over the command type. It never looks inside a command. | Keeps `raft` free of airports and of nodes, and lets the same code replicate controllers in Phase 5. |
+| What a node may touch | Only its own state. Inputs come in through `step`, and everything it wants done goes out as effects. No clock, network, disk, threads or references to other nodes. | This is what lets one node sit behind a simulated host or a production host without a line changed. |
+| The interface between node and host | The `Node` trait and nothing else. The host calls the node; the node never calls the host. | A node that returns what it wants done, without doing it, can be tested by handing it values, and cannot do input or output by accident. |
+| One implementation of each node | There is no browser version and production version of anything in `raft` or `node`. Only the host differs. | If the demo ran different logic from production, it would show nothing about production. |
+| One host per node | Each node has its own host, in both setups. In the simulation the hosts share one `Sim`, which owns the clock, the queue and the network. | The two setups then have the same shape, and only the piece between the hosts differs. The `Sim` has to be one object because a run is only replayable if one place decides the order of events. |
+| Who talks to whom | Any node may send to any address. Replicas of a group send Raft messages straight to each other. A client sends requests straight to the replica it believes is leader. | There is nothing between a client and the replicas that could become a bottleneck or a single point of failure. |
+| How a node learns the time | Every input to a node carries the current time. The node says when it next needs waking. The same goes for a Raft member inside a replica. | The simulation is an event loop, so "wake me at time T" costs one event. A regular tick would cost events when nothing is happening. |
+| How Raft gets randomness | Each replica is given its own seeded generator when it is created, and passes it to its member. | Keeps the node pure, and the host stays in charge of the seed. |
+| How the fake disk works | A node keeps everything that must survive a crash in one struct. On a crash its host keeps that struct and throws the rest of the node away. | It makes "what survives a crash" impossible to get wrong by accident, and costs nothing at run time. Disks that fail come in Phase 5. |
+| When durable state is saved | The messages a node sends in one `step` leave only after its durable state at the end of that step is saved. In a simulated host saving is instant, so this is free. | It is the promise Raft relies on (a vote is on disk before the reply is sent), stated so that a production host knows what it must do. |
+| What Raft stores | Raft is generic over the command type. It never looks inside a command. | Keeps `raft` free of airports and of nodes, and lets the same code replicate region control in Phase 5. |
 | Where duplicates are filtered | In the replica, when an entry is applied. Not in Raft, not in the airport. | As the design proposal says. It is the only point where all three replicas are guaranteed to make the same decision. |
-| Airport time and host time | Separate in Phase 2. Airport time is just a number inside `AdvanceTime` commands. Host time drives message delays and election timers. | A six-hour scenario can be replicated in a few simulated minutes. Tying the two clocks together is added to the LocalController in Phase 3. |
-| How many clients | One: the LocalController, sending the scenario's commands in order with one request outstanding at a time. | With one client, the agreed log must equal the scenario, which gives an exact reference answer. |
-| Which nodes can fail | Replicas crash and restart, and any link with a replica at one end can lose, delay or repeat messages. The LocalController and the driver do not crash, and the link between them is perfect. | Phase 2 is about the replicas agreeing. A controller that survives its own crash, and a lossy hop above it, need a parent that retries. That is Phase 4 and 5. |
+| Airport time and host time | Separate in Phase 2. Airport time is just a number inside `AdvanceTime` commands. Host time drives message delays and election timers. | A six-hour scenario can be replicated in a few simulated minutes. Tying the two clocks together is Phase 3's job. |
+| How many clients | One: the driver, sending the scenario's commands in order with one request outstanding at a time. | With one client, the agreed log must equal the scenario, which gives an exact reference answer. |
+| Which nodes can fail | Replicas crash and restart. Every link can lose, delay or repeat messages, including the driver's. The driver itself does not crash. | Phase 2 is about the replicas agreeing. A client that survives its own crash needs somewhere durable to keep its sequence number, which arrives with region control. |
 | Group size | Three, but nothing in `raft` may assume three. | Tests should also run with one member and five. |
 
 ## 5. Out of scope for Phase 2
 
 - **Discarding old log entries.** Logs grow for the whole run. (Raft calls the feature that fixes this "log compaction" or "snapshots".)
-- **A real runtime.** Phase 2 builds only the host. The nodes are written so that a runtime with real sockets, a real clock and real files could run them unchanged, and ticket H6 is there for anyone who wants to prove it, but nothing in Phase 2 depends on it.
-- **Controllers above the LocalController.** The AreaController is Phase 4. The driver stands in for it.
-- **A controller that crashes**, and a replicated controller. Phase 5.
+- **A production host.** Phase 2 builds only the simulated host. The nodes are written so that a host with real sockets, the system clock and real files could run them unchanged, and ticket H6 is there for anyone who wants to prove it, but nothing in Phase 2 depends on it.
+- **Region control**, the node above several airports. Phase 4. The driver is the only client in Phase 2.
+- **A client that crashes.** Phase 4 and 5.
 - **Changing which replicas are in the group** while it runs.
 - **Disks that lose or corrupt data.** The fake disk is perfect. Phase 5.
-- **Reading the airport's state through Raft.** The controller only sends commands. The web view looks at replicas directly through the host.
+- **Reading the airport's state through Raft.** A client only sends commands. The web view looks at replicas directly through the simulation.
 - **Tying airport time to host time**, the speed dial, and injecting events from a person. Phase 3.
 - **Performance work** such as sending several entries per message as a tuned batch, or sending the next message before the previous one is acknowledged. Do the simplest correct thing.
 
@@ -179,10 +200,10 @@ Each of these could have gone another way. They are fixed here so the tickets fi
 The pieces are grouped by subject in section 7, but that is not the best order to build them in. This order gets something visibly running early and adds one hard idea at a time.
 
 1. **A1, A2, A3.** Groundwork.
-2. **B1, C1, D1 (first cut), C2.** An empty member, a replica that does nothing but run it, the event loop, and a perfect network. Three replicas that exchange nothing yet.
+2. **B1, C1, D1 (first cut), C2.** An empty member, a replica that does nothing but run it, the event loop, and a host per replica on a perfect network. Three replicas that exchange nothing yet.
 3. **B2, C6, E1 (the first rule only).** Elections. You can now watch a leader get elected in the trace, and a checker confirms there is never more than one.
 4. **B3, B4, B5.** Logs are copied, repaired and committed.
-5. **D1 (the rest), D3, D4.** An airport behind each member, a LocalController above the three replicas, and a driver playing a scenario at it. On a perfect network the final fingerprint should match Phase 1.
+5. **D1 (the rest), D3, D4.** An airport behind each member, the group client, and a driver that uses it to play a scenario. On a perfect network the final fingerprint should match Phase 1.
 6. **E1 (the rest), E2.** The full set of checkers. Everything should pass on a perfect network.
 7. **C3, B6.** Crashes and restarts.
 8. **C4, C5.** Lost, late and repeated messages, split networks, and a seeded schedule of faults. This is where the bugs appear.
@@ -204,14 +225,14 @@ The pieces are grouped by subject in section 7, but that is not the best order t
 #### A2. Identifier types
 *Fine to delegate · Needs: nothing · Small*
 
-**Build.** Small wrapper types so that different kinds of number cannot be mixed up: a node identifier, a client identifier, an election term, and a log position. A node identifier is the address of any node, replica or controller. A Raft member has no identifier of its own: it goes by the identifier of the replica it is in. All fixed-width, none `usize`, all deriving `Hash`, `Ord` and the serde traits.
+**Build.** Small wrapper types so that different kinds of number cannot be mixed up: a node identifier, a client identifier, an election term, and a log position. A node identifier is the address of any node. A Raft member has no identifier of its own: it goes by the identifier of the replica it is in. All fixed-width, none `usize`, all deriving `Hash`, `Ord` and the serde traits.
 
 **Done when.** They exist and it is a compile error to pass a log position where an election term is expected.
 
 #### A3. The `Node` trait and the `node` crate
 *By hand · Needs: A2 · Small*
 
-**Build.** A new crate, `node`, that will hold every participant of the system. In this ticket it holds only the interface they share and the one message type they exchange. A suggested shape, signatures only:
+**Build.** A new crate, `node`, that holds the participants of the system. In this ticket it holds only the interface between a node and its host, and the one message type nodes exchange. A suggested shape, signatures only:
 
 ```rust
 pub enum Input<M> {
@@ -227,24 +248,22 @@ pub trait Node {
     type Message;
     fn id(&self) -> NodeId;
     fn step(&mut self, now: Ms, input: Input<Self::Message>) -> Vec<Effect<Self::Message>>;
-    fn next_wake(&self) -> Option<Ms>;      // when the runtime should send the next Wake
+    fn next_wake(&self) -> Option<Ms>;      // when the host should send the next Wake
 }
 
 /// Everything one node can say to another. Grows as the tickets land.
 pub enum Message {
     Raft(det::objects::Message<Request>),   // replica to replica, same group (D1)
-    Request(Request),                       // controller to one of its replicas (D2)
-    Reply(ClientReply),                     // replica to its controller (D2)
-    Submit(Command),                        // parent to controller: "do this next" (D3)
-    Outputs(Vec<Output>),                   // controller to parent: the answer, in order (D3)
+    Request(Request),                       // client to a replica (D2)
+    Reply(ClientReply),                     // replica to the client that asked (D2)
 }
 ```
 
 **Rules.**
 - A node is written as if it ran alone on its own machine. It never reads a clock, opens a connection, touches a disk, starts a thread, or holds a reference to another node. Everything comes in through `step` and goes out as effects.
-- A controller knows the nodes it owns only by their `NodeId`s, given to it when it is created. It never constructs them, holds them or calls them.
+- `Node` is the whole interface between a node and its host. The host calls the node. The node never calls the host and cannot tell which kind of host it has.
 - `step` must be harmless for a `Wake` that arrives early or late, and `next_wake` is a pure read.
-- `node` depends on `det`, `airport` and `raft`. Neither it nor anything it depends on may depend on `host`. The host is one runtime for nodes, and a node must not be able to tell which runtime it is in.
+- `node` depends on `det`, `airport` and `raft`. Neither it nor anything it depends on may depend on `host`.
 - There is one implementation of each node. Nothing in `node` or `raft` is compiled differently for the browser.
 
 **Done when.** A toy node written in a test (for example one that answers every message with the same message) implements the trait, and a check in `just check` fails if `det`, `airport`, `raft` or `node` gains a dependency on `host`.
@@ -253,14 +272,14 @@ pub enum Message {
 
 Everything in this piece lives in `crates/raft`, is pure logic, and is tested without the host by a few lines of test code that hand messages from one member to another.
 
-A **member** is the agreement logic of one replica. It is not a node: it has no address of its own, and it is the replica around it that implements `Node`, takes messages off the network and hands the Raft ones in. `raft` knows nothing of nodes, controllers or airports, only of the other members of its group.
+A **member** is the agreement logic of one replica. It is not a node: it has no address of its own, and it is the replica around it that implements `Node`, receives messages from its host and hands the Raft ones in. `raft` knows nothing of nodes, hosts or airports, only of the other members of its group.
 
 One principle applies to every ticket here. **The network may deliver any message late, twice, out of order, or not at all.** Every handler must do the right thing in all four cases. A reply is just another message: there is no guarantee it arrives, and no guarantee it is the reply to the thing you sent most recently.
 
 #### B1. The member's skeleton
 *By hand · Needs: A1, A2 · Small*
 
-**Build.** The member type and its interface, with no behaviour yet. It is one concrete type, `raft::Member<C>`, not a trait: the same code runs in every runtime. A suggested shape, signatures only:
+**Build.** The member type and its interface, with no behaviour yet. It is one concrete type, `raft::Member<C>`, not a trait: the same code runs behind every kind of host. A suggested shape, signatures only:
 
 ```rust
 pub enum Payload<C> { Noop, Command(C) }
@@ -390,34 +409,39 @@ impl<C: Clone + Eq> Member<C> {
 - A leader that crashes and restarts does not believe it is still leader.
 - A restarted follower re-emits `Committed` for positions 1 onwards, in order.
 
-### C. The host
+### C. The simulated host
 
-Everything in this piece lives in `crates/host`. The host is the simulated runtime: it runs any set of nodes, and knows them only through the `Node` trait. It is generic plumbing in one sense, but its fault injection is half of what makes the project "like TigerBeetle", so most of it is marked by hand.
+Everything in this piece lives in `crates/host`. It has two parts, and it matters which is which.
 
-The host is flat. It keeps every node side by side in one map, with one queue and one clock, however the nodes are arranged among themselves. There are no hosts inside hosts.
+- **`SimHost`**, one per node. It does for its node what a production host would: hands it messages and wakes, tells it the time, and keeps its durable state across a crash. It knows its node only through the `Node` trait.
+- **`Sim`**, one per run. It is what the hosts are plugged into: the one clock, the one queue of events, the fake network and its faults, the checkers and the trace. In production its place is taken by the real network and each machine's own clock.
+
+Anything that concerns one node belongs in `SimHost`. Anything that concerns the order of events, or more than one node at once, belongs in `Sim`. The hosts sit side by side in the `Sim`. There are no hosts inside hosts.
+
+This piece is generic plumbing in one sense, but its fault injection is half of what makes the project "like TigerBeetle", so most of it is marked by hand.
 
 #### C1. The event loop and the clock
 *By hand · Needs: A1 · Small*
 
-**Build.** The to-do list at the centre of the host: events ordered by simulated time, and a loop that takes the earliest, moves the clock to it, and handles it.
+**Build.** The to-do list at the centre of the `Sim`: events ordered by simulated time, and a loop that takes the earliest, moves the clock to it, and hands it to the host it is for.
 
 **Rules.**
 - Two events at the same simulated time are handled in the order they were added. This must be explicit, not an accident of the data structure.
 - Simulated time never goes backwards.
 - All randomness comes from generators derived from one seed. Use a separate generator for each purpose (network, faults, each life of each node), each derived from the seed, so that changing the fault settings does not change the message delays.
-- There is one clock and one queue for the whole run, and only the host moves the clock.
+- There is one clock and one queue for the whole run. They belong to the `Sim`, never to a host, and only the `Sim` moves the clock.
 
 **Done when.** A test schedules events out of order and sees them handled in time order, with ties in insertion order, and the same seed gives the same sequence twice.
 
-#### C2. A perfect network, and the nodes on it
+#### C2. A host per node, on a perfect network
 *By hand · Needs: C1, A3 · Small*
 
-**Build.** The host is handed a set of nodes when it is created. When a node emits `Send`, the host schedules a delivery event a fixed short time later. When a node's `next_wake` changes, the host schedules a `Wake`.
+**Build.** `SimHost`, which runs one node, and the `Sim`'s perfect network. The `Sim` is handed a set of nodes and gives each a host. When a node emits `Send`, its host passes the message to the `Sim`, which schedules a delivery a fixed short time later. When a node's `next_wake` changes, its host asks the `Sim` for a `Wake`.
 
 **Rules.**
-- The host is generic over `Node`. It does not know what a replica or a controller is, and can be tested with toy nodes.
-- Nodes never hold references to each other or to the host. Messages are values that move through the event list.
-- Any node may send to any other node of the run. A `Send` to an address the host was never given is a bug in the sender, and fails loudly.
+- `SimHost` and `Sim` are generic over `Node`. They do not know what a replica is, and can be tested with toy nodes.
+- Nodes never hold references to each other, to their host or to the `Sim`. Messages are values that move through the event list.
+- Any node may send to any other node of the run. A `Send` to an address the `Sim` was never given is a bug in the sender, and fails loudly.
 - A `Wake` scheduled for a time the node no longer cares about is delivered anyway and ignored by the node.
 
 **Done when.** Two toy nodes pass a message back and forth in a test. Then, with B2 and the first cut of D1 in place, three replicas on the perfect network elect exactly one leader and keep it.
@@ -425,21 +449,22 @@ The host is flat. It keeps every node side by side in one map, with one queue an
 #### C3. The fake disk, crashes and restarts
 *By hand · Needs: C2, B6, D1 · Small*
 
-**Build.** Two host operations. Crash: take the node's durable state, keep it, and discard the node. Restart: build a new node from the kept state, with a new generator derived from the seed. `Node` gains whatever the host needs to do this for any node (suggested: an associated `Durable` type, `into_durable(self)`, and a function given to the host that builds a node from an id, its durable state, a generator and the time).
+**Build.** Two operations on a `SimHost`. Crash: take the node's durable state, keep it, and discard the node. Restart: build a new node from the kept state, with a new generator derived from the seed. `Node` gains whatever a host needs to do this for any node (suggested: an associated `Durable` type, `into_durable(self)`, and a function given to the host that builds a node from an id, its durable state, a generator and the time).
 
 **Rules.**
+- The kept state and the count of lives belong to the node's host: this is its fake disk. A host outlives its node.
 - Messages addressed to a crashed node are dropped when they would have been delivered.
 - A `Wake` for a crashed node is dropped. One left over from before the crash that fires after a restart is harmless.
 - A replica's durable state is its member's `Durable` and nothing else. The airport and the duplicate table are discarded on a crash and rebuilt from the log (D1).
-- The messages a node emits in a `step` are released only after its durable state at the end of that step is saved. In the host this is automatic, because the state is read out of the node at the moment of the crash. The rule is written down for the sake of a real runtime.
-- In Phase 2 only replicas are crashed. The LocalController and the driver run for the whole run.
+- The messages a node emits in a `step` are released only after its durable state at the end of that step is saved. In a simulated host this is automatic, because the state is read out of the node at the moment of the crash. The rule is written down for the sake of a production host.
+- In Phase 2 only replicas are crashed. The driver runs for the whole run.
 
 **Done when.** Crashing the leader on the perfect network produces a new leader within a few election timeouts, and restarting the old one brings it back as a follower with a matching log.
 
 #### C4. An unreliable network
 *By hand · Needs: C2 · Medium*
 
-**Build.** Replace the perfect network's fixed delay with seeded misbehaviour, controlled by settings:
+**Build.** Replace the `Sim`'s fixed delay with seeded misbehaviour, controlled by settings:
 
 | Fault | Behaviour |
 |---|---|
@@ -449,16 +474,15 @@ The host is flat. It keeps every node side by side in one map, with one queue an
 | Partition | A set of blocked links. A message whose link is blocked at the moment of delivery is dropped. Links are one-directional, so "A can reach B but B cannot reach A" is possible. |
 
 **Rules.**
-- Faults apply to every link with a replica at one end: replica to replica, and replica to LocalController in both directions.
-- The link between the driver and the LocalController keeps the perfect network's fixed delay and is never faulty (section 4, "Which nodes can fail").
-- The network decides by address only. It never looks at what kind of node is at either end, or inside a message.
+- Faults apply to every link: replica to replica, and between the driver and each replica in both directions.
+- The network belongs to the `Sim`, not to any host. It decides by address only, and never looks at what kind of node is at either end, or inside a message.
 
 **Done when.** Unit tests show each fault doing what the table says, and the same seed produces the same pattern of faults twice.
 
 #### C5. A seeded schedule of faults
 *By hand · Needs: C3, C4 · Medium*
 
-**Build.** A generator that turns a seed and a difficulty level into a list of timed fault events: crash this replica, restart it, block these links, unblock them. The host adds them to its event list at the start of a run.
+**Build.** A generator that turns a seed and a difficulty level into a list of timed fault events: crash this replica, restart it, block these links, unblock them. The `Sim` adds them to its event list at the start of a run.
 
 **Rules.**
 - Three levels, in the spirit of the TigerBeetle demo:
@@ -466,7 +490,7 @@ The host is flat. It keeps every node side by side in one map, with one queue an
 | Level | Network | Faults |
 |---|---|---|
 | Calm | Short delays, nothing lost. | None. |
-| Rough | Longer delays, some loss and duplication. | One replica at a time crashed or cut off, so a majority can always talk to each other and to the LocalController. |
+| Rough | Longer delays, some loss and duplication. | One replica at a time crashed or cut off, so a majority can always talk to each other and to the driver. |
 | Hostile | Delays longer than the election timeout, heavy loss and duplication. | Anything, including a majority down at once, one-directional partitions, and faults in quick succession. |
 
 - Every schedule ends with a **heal**: all replicas restarted, all links unblocked, network set to calm. The run then continues for a fixed stretch of simulated time. Ticket E3 depends on this.
@@ -477,33 +501,34 @@ The host is flat. It keeps every node side by side in one map, with one queue an
 #### C6. The trace
 *Fine to delegate · Needs: C2 · Small*
 
-**Build.** A list of everything the host did, in order, as a serde-serialisable enum: message sent, delivered, dropped or duplicated; a member's role or election term changed; position committed; entry applied with the fingerprint afterwards; node crashed or restarted; links blocked or unblocked; the LocalController sent or received something; the driver submitted a command or received its outputs.
+**Build.** A list of everything the `Sim` did, in order, as a serde-serialisable enum: message sent, delivered, dropped or duplicated; a member's role or election term changed; position committed; entry applied with the fingerprint afterwards; node crashed or restarted; links blocked or unblocked; the driver sent a request or received a reply.
 
 **Rules.**
 - Recording the trace must not change the run. A run with the trace switched off has the same fingerprints as one with it on.
-- The trace is the host's. Nodes do not write to it: the host records what it sees them do (the messages they send, and what their read-only accessors show after each step).
+- The trace is the `Sim`'s. Nodes do not write to it: the `Sim` records what it sees them do (the messages they send, and what their read-only accessors show after each step).
 
 **Done when.** A run can print its trace as readable lines, and as JSON for the web view in piece G.
 
-### D. Replica and controller
+### D. Replica and client
 
-The replica and the LocalController live in `crates/node`, because they are the system itself and must not depend on the simulator. Both implement `Node`. The driver (D4) is the exception: it exists only to feed the simulator, so it lives in `crates/host`.
+The replica and the group client live in `crates/node`, because they are the system itself and must not depend on the simulation. The driver (D4) is the exception: it exists only to feed the simulation, so it lives in `crates/host`.
 
 #### D1. The replica
 *By hand · Needs: A3, B1 (first cut); B5 (the rest) · Medium*
 
-**Build.** A node that owns one Raft member and one `Airport`. It hands Raft messages and wakes to the member, sends on the messages the member wants sent, and for every `Committed` effect it applies the entry to the airport.
+**Build.** A node that owns one Raft member and one `Airport`. It hands Raft messages and wakes to the member, turns the messages the member wants sent into `Send` effects for its host, and for every `Committed` effect it applies the entry to the airport.
 
-**First cut.** A replica that only carries Raft messages between its member and the runtime is enough for C2 and can be written as soon as B1 exists. Applying entries waits for B5.
+**First cut.** A replica that only carries Raft messages between its member and its host is enough for C2 and can be written as soon as B1 exists. Applying entries waits for B5.
 
 **Rules.**
-- A replica is created with its own `NodeId`, the ids of the other replicas in its group, and the id of the LocalController that owns it. Its member's peers are those other replicas.
-- A Raft message is accepted only from a replica of its own group. Anything else on the network reaches it only from its LocalController.
+- A replica is created with its own `NodeId` and the ids of the other replicas in its group. Its member's peers are those other replicas.
+- A Raft message is accepted only from a replica of its own group. A request may come from any address.
+- The replica never delivers anything itself. It returns effects, and its host does the sending.
 - The airport is only ever changed by applying committed entries, in order.
 - An empty entry (`Payload::Noop`) is skipped.
 - After applying each entry the replica records the position and the airport's fingerprint, and offers both through a read-only accessor for the checkers and the trace.
 - A restarted replica starts with a fresh `Airport::new` and rebuilds it as its member re-emits `Committed` from position 1.
-- The replica answers its controller only if its member is the leader at the moment the entry is applied.
+- The replica answers a request only if its member is the leader at the moment the entry is applied, and sends the answer to the address the request came from. It remembers that address in memory only. A new leader that never saw the request stays silent, and learns the address when the client resends.
 - The replica's `next_wake` is its member's.
 
 **Done when.** On the perfect network with commands proposed straight to the leader, all three replicas report the same fingerprint at every position.
@@ -524,7 +549,7 @@ pub enum ClientReply {
 
 **Rules.**
 - Raft replicates `Request` values. The airport still only ever sees the `Command` inside.
-- The client is the LocalController. Its `ClientId` is given to it when it is created.
+- A `ClientId` names one group client (D3), and is given to it when it is created.
 - Each replica keeps a table with one row per client: the highest `seq` applied for that client, and the outputs that application produced.
 - When a committed `Request` is about to be applied:
   - If its `seq` is one more than the client's row, apply it, and store the outputs in the row.
@@ -539,43 +564,56 @@ pub enum ClientReply {
 - A retried `RequestLanding` does not produce `Rejected: DuplicateFlight` and does not change the rejected count.
 - Two replicas given the same log, including repeats, have the same table and the same fingerprint.
 
-#### D3. The LocalController
+#### D3. The group client
 *By hand · Needs: D1 · Medium*
 
-**Build.** The node that owns the three replicas of one airport. It takes commands from its parent, one `Submit` at a time, gets each one agreed by the group, and sends the outputs back up. This is the "client" of the first version of this spec, and the controller of the design proposal's Phase 3, built as a node.
+**Build.** The code that talks to one airport group. It is given commands, gets each one agreed by the group, and hands back the outputs. It is not a node and has no address of its own. It is a plain value that a node holds and steps, the way a replica holds a Raft member, so the same code serves the driver now and region control in Phase 4.
+
+A suggested shape, signatures only:
+
+```rust
+impl GroupClient {
+    pub fn new(client: ClientId, replicas: Vec<NodeId>, config: ClientConfig) -> Self;
+    pub fn submit(&mut self, command: Command);          // queued behind anything outstanding
+    pub fn step(&mut self, now: Ms, input: ClientInput) -> Vec<ClientEffect>;
+    pub fn next_wake(&self) -> Option<Ms>;               // the resend timeout
+}
+
+pub enum ClientInput  { Wake, Reply { from: NodeId, reply: ClientReply } }
+pub enum ClientEffect { Send { to: NodeId, request: Request }, Done { outputs: Vec<Output> } }
+```
 
 **Rules.**
-- A LocalController is created with its own `NodeId`, its `ClientId`, the id of its parent, and the ids of the replicas it owns. It never constructs, holds or calls a replica: it only sends to those ids.
-- Commands submitted by the parent are queued and handled in the order they arrived.
-- The controller has at most one request outstanding. It does not send request *n+1* until it has a `Done` reply for request *n*.
+- The client knows the replicas only by their `NodeId`s. It never constructs, holds or calls a replica.
+- Submitted commands are queued and handled in the order they were submitted.
+- The client has at most one request outstanding. It does not send request *n+1* until it has a `Done` reply for request *n*.
 - Each new command gets the next `seq`. A resend uses the same `seq`.
-- The controller sends to the replica it believes is leader. On `NotLeader` it follows the hint if there is one, and otherwise tries another replica.
-- If no reply arrives within a timeout, it resends, to a different replica. The timeout is its `next_wake`.
+- The client sends to the replica it believes is leader. On `NotLeader` it follows the hint if there is one, and otherwise tries another replica.
+- If no reply arrives within a timeout, it resends, to a different replica.
 - A reply whose `seq` is not the one outstanding is ignored.
-- For each `Done`, the controller sends the outputs to its parent, in the order the commands were submitted, each exactly once.
-- The controller's requests and the replicas' replies travel over the same fake network as everything else, so they can be lost, delayed and duplicated too.
-- The controller keeps nothing durable and does not crash in Phase 2.
-- It does not send `AdvanceTime` by itself in Phase 2. Time arrives as commands from above, like everything else (section 4, "Airport time and host time").
+- `Done` is emitted once per command, in the order the commands were submitted.
+- Like a Raft member, it is told the time and never reads a clock, and it sends nothing itself: the node that holds it turns its `Send` effects into its own.
 
-**Done when.** A test that hands messages between one LocalController and three replicas by hand, with no host, gets a command agreed and its outputs sent to the parent, and survives a `NotLeader` and a lost reply.
+**Done when.** A test that hands messages between one group client and three replicas by hand, with no host, gets a command agreed and its outputs returned, and survives a `NotLeader` and a lost reply.
 
 #### D4. The scenario driver
 *Fine to delegate · Needs: D3, C2 · Small*
 
-**Build.** A node, in `crates/host`, that stands where the LocalController's parent will stand in Phase 4. It is given a `Scenario`, sends its commands to the LocalController as `Submit` messages in order, and collects the `Outputs` that come back. Together with it, the function that builds a whole Phase 2 run: one driver, one LocalController and three replicas, each with its generator from the seed, handed to the host.
+**Build.** A node, in `crates/host`, that holds one group client. It is given a `Scenario`, submits its commands in order, and collects the outputs. Together with it, the function that builds a whole Phase 2 run: one driver and three replicas, each with its generator from the seed, handed to the `Sim`.
 
 **Rules.**
 - The driver is the only node that is not part of the system. It lives in `host` so that `node` holds nothing a real deployment would not ship.
-- The host holds nodes of three kinds in one map. How it does so (an enum, or trait objects) is up to you, but checkers must still be able to reach a replica's read-only accessors.
-- The link between the driver and the LocalController is perfect (C4), so the driver needs no retries.
+- The driver has a host like any other node, and its messages cross the same fake network, so they can be lost, delayed and duplicated too. The group client's resends are what get it through.
+- The driver does not crash in Phase 2.
+- The `Sim` now holds nodes of two kinds. How it does so (an enum, or trait objects) is up to you, but checkers must still be able to reach a replica's read-only accessors.
 
 **Done when.** On the perfect network, the driver plays a whole demo scenario and the outputs it collected, in order, equal `scenario::run`'s outputs for the same scenario.
 
 ### E. Checkers
 
-The checkers run inside the host after every event. They can see inside every replica through its read-only accessors, and through those its member's `status()` and `log()`. A failure stops the run and reports the seed, the simulated time, and which rule broke.
+The checkers run inside the `Sim` after every event. They can see inside every replica through its read-only accessors, and through those its member's `status()` and `log()`. A failure stops the run and reports the seed, the simulated time, and which rule broke.
 
-Checkers belong to the simulator, not to the system: no node knows they exist, and they are the one place allowed to look at several nodes at once.
+Checkers belong to the simulation, not to the system: no node and no host knows they exist, and they are the one place allowed to look at several nodes at once.
 
 Write the checkers with the same discipline as `tests/invariants.rs` in the airport crate: they may share types with the code they check, but none of its logic.
 
@@ -610,7 +648,7 @@ Write the checkers with the same discipline as `tests/invariants.rs` in the airp
 | Exactly once | For each client and `seq`, each replica changes its airport at most once per life, however many times the request appears in the log. |
 | Same answer as one airport | At the end of the run, every live replica's airport fingerprint, and the driver's collected outputs in order, equal what `scenario::run` gives for the same scenario with no replication at all. |
 
-**Why the third rule is so strong.** With one LocalController sending one request at a time, the agreed log has to contain the scenario's commands in the scenario's order. So a correct replicated run, however badly the network behaved, must end in exactly the state Phase 1 computes. And since Phase 1's own tests show that state obeys the aviation rules, there is no need to re-check separation or closures here.
+**Why the third rule is so strong.** With one client sending one request at a time, the agreed log has to contain the scenario's commands in the scenario's order. So a correct replicated run, however badly the network behaved, must end in exactly the state Phase 1 computes. And since Phase 1's own tests show that state obeys the aviation rules, there is no need to re-check separation or closures here.
 
 **Done when.** All three pass on a calm run, and the third is the final line of every run's report.
 
@@ -646,7 +684,7 @@ Write the checkers with the same discipline as `tests/invariants.rs` in the airp
 | 7 | Count two copies of the same vote reply as two votes. |
 | 8 | Let a reply from an earlier election term update what the leader believes a follower holds. |
 | 9 | Skip the duplicate table and apply every committed request. |
-| 10 | As the LocalController, give a resend a new `seq`. |
+| 10 | In the group client, give a resend a new `seq`. |
 
 **Done when.** Every switch is caught, and the test output names which checker caught it and at which seed. Any switch that is never caught means a checker or the fault schedule is too weak, and that is the thing to fix.
 
@@ -683,7 +721,7 @@ Write the checkers with the same discipline as `tests/invariants.rs` in the airp
 #### G2. The replica view
 *Fine to delegate · Needs: G1 · Medium*
 
-**Build.** A second page beside the runway timeline. Three boxes, one per replica, showing role, election term, last log position, commit position and state fingerprint. Above them one box for the LocalController, showing its outstanding request and which replica it believes is leader. Messages drawn moving between all four. Crashed replicas greyed out, blocked links shown cut. A seed box, a fault level selector, and play, pause and step controls that walk through the trace.
+**Build.** A second page beside the runway timeline. Three boxes, one per replica, showing role, election term, last log position, commit position and state fingerprint. Beside them one box for the driver, showing its outstanding request and which replica it believes is leader. Messages drawn moving between all four. Crashed replicas greyed out, blocked links shown cut. A seed box, a fault level selector, and play, pause and step controls that walk through the trace.
 
 **Done when.** Typing in a seed printed by an overnight failure shows that failure happening.
 
@@ -697,8 +735,8 @@ All by hand. None is needed to finish Phase 2. Each is a self-contained thing to
 | H2 | A trial election before the real one, so a member that was cut off cannot disrupt a healthy leader when it returns. | Known as "pre-vote". The hostile level will show you the problem it solves. |
 | H3 | A leader that steps down if it cannot reach a majority for a while. | Stops a cut-off leader accepting proposals it can never commit. |
 | H4 | Discarding old log entries, with a saved copy of the airport and the duplicate table. | Needs `Airport` to be saveable, and a new message for followers that are too far behind. The largest of these. |
-| H5 | A second client (a second controller with its own `ClientId`) sending its own commands at the same time. | Exercises one table row per client. The "same answer as one airport" rule has to be restated: replay the agreed log through a fresh airport and compare. |
-| H6 | A real runtime: a second binary that runs one node per process, with messages over TCP, the machine's clock, and `Durable` in a file. Four processes make one airport: three replicas and their LocalController. | It is the proof that the nodes are what they claim to be. It needs a way to turn `Message` into bytes, and a crate that is exempt from the determinism ban, since it must read a real clock. Nothing in `node` or `raft` should need to change, and if something does, that is the finding. |
+| H5 | A second client (a second driver with its own `ClientId`) sending its own commands at the same time. | Exercises one table row per client. The "same answer as one airport" rule has to be restated: replay the agreed log through a fresh airport and compare. |
+| H6 | A production host: a second binary that runs one node per process, with messages over TCP, the machine's clock, and `Durable` in a file. Three processes make one airport, and a fourth plays the client. | It is the proof that the nodes are what they claim to be. It needs a way to turn `Message` into bytes, and a crate of its own that is exempt from the determinism ban, since it must read a real clock. Nothing in `node` or `raft` should need to change, and if something does, that is the finding. |
 
 ## 8. Finished when
 
@@ -736,7 +774,7 @@ stateDiagram-v2
     Candidate --> Follower: any message with a higher term
 ```
 
-A crash is not a transition. The runtime throws the whole replica away and builds a new one, member included, from `Durable`, which always starts as a follower (B6).
+A crash is not a transition. The host throws the whole replica away and builds a new one, member included, from `Durable`, which always starts as a follower (B6).
 
 ### 10.2 State, split by what survives a crash
 
@@ -832,63 +870,67 @@ next_wake():
         Follower | Candidate   => election_deadline
 ```
 
-In practice this is always `Some`. `None` is only needed for a leader with no peers, which has nothing to send. A replica reports its member's `next_wake` as its own, and the host re-reads it after every `step` and schedules a new `Wake` if it changed (C2). Older `Wake`s still fire and are ignored by the check at the top of `step`.
+In practice this is always `Some`. `None` is only needed for a leader with no peers, which has nothing to send. A replica reports its member's `next_wake` as its own, and its host re-reads it after every `step` and asks for a new `Wake` if it changed (C2). Older `Wake`s still fire and are ignored by the check at the top of `step`.
 
 ### 10.7 Setting deadlines in `new`
 
 `Member::new(.., now)` takes a time so it can set `election_deadline = now + random(base, 2*base)` straight away. After a restart this makes the member wait a full timeout before it may stand for election, which gives a surviving leader time to reach it first (suggestion, not required by B6).
 
-## 11. Appendix: how the nodes and the host fit together (A3, C2, D1 to D4)
+## 11. Appendix: how the nodes, the hosts and the simulation fit together (A3, C2, D1 to D4)
 
 Like section 10, this adds no requirements.
 
 ### 11.1 Layers
 
 ```text
-host        the simulated runtime: clock, queue, fake network, fake disk, faults, checkers, trace, driver
-  |  drives, through the Node trait only
-node        Replica, LocalController        (each one a Node; could each be a process)
+host        Sim       one per run: clock, queue, fake network, faults, checkers, trace
+            SimHost   one per node: delivers, wakes, tells the time, keeps Durable
+            Driver    a node for the simulation only: a GroupClient and a scenario
+  |  a host drives its node through the Node trait only
+node        Replica       a Node; could be a process of its own
+            GroupClient   not a node; held by whatever node commands an airport
   |  a replica contains
-raft        Member<Request>                 (inputs in, effects out; no address of its own)
-airport     Airport                         (apply a command, get outputs)
+raft        Member<Request>   inputs in, effects out; no address of its own
+airport     Airport           apply a command, get outputs
 det         Rng, fingerprint, NodeId, Term, Index, Ms
 ```
 
-Dependencies only point downwards. `cli` and `wasm` sit on top of `host`.
+Dependencies only point downwards. `cli` and `wasm` sit on top of `host`. A production host (H6) would sit beside `host`, on top of `node`.
 
 ### 11.2 One command, start to finish
 
 ```text
-Driver          --Submit(cmd)-->                 LocalController
-LocalController --Request{client, seq, cmd}-->   Replica 2 (believed leader)
-Replica 2:      member.step(Propose(request))    -> Send AppendEntries to replicas 1 and 3
-Replica 2       --Raft(AppendEntries)-->         Replicas 1, 3
-Replicas 1, 3   --Raft(AppendReply)-->           Replica 2
-Replica 2:      member emits Committed           -> duplicate table, then Airport::apply
-Replica 2       --Reply(Done{seq, outputs})-->   LocalController
-LocalController --Outputs(outputs)-->            Driver
+Driver:     client.submit(cmd)                   -> Send Request to replica 2 (believed leader)
+Driver      --Request{client, seq, cmd}-->       Replica 2
+Replica 2:  member.step(Propose(request))        -> Send AppendEntries to replicas 1 and 3
+Replica 2   --Raft(AppendEntries)-->             Replicas 1, 3
+Replicas 1, 3 --Raft(AppendReply)-->             Replica 2
+Replica 2:  member emits Committed               -> duplicate table, then Airport::apply
+Replica 2   --Reply(Done{seq, outputs})-->       Driver
+Driver:     client.step(Reply)                   -> Done{outputs}
 ```
 
-Each arrow is one `Effect::Send` that the host turns into a `Deliver` event. Replicas 1 and 3 apply the same entry when they learn it is committed, and stay silent because they are not the leader.
+Each arrow is one `Effect::Send`. The sender's host hands it to the `Sim`, and the `Sim` later hands it to the receiver's host as a delivery. Replicas 1 and 3 apply the same entry when they learn it is committed, and stay silent because they are not the leader.
 
-### 11.3 Inside `Host::step`
+### 11.3 Inside `Sim::step`
 
 ```text
 step():
     pop the earliest event, or return false
     clock.advance_to(its time)
-    Wake { node }                 => step_node(node, Input::Wake)
-    Deliver { from, to, message } => step_node(to, Input::Message { from, message })
+    Wake { node }                 => step_host(node, Input::Wake)
+    Deliver { from, to, message } => step_host(to, Input::Message { from, message })
     (C3, C5 add: Crash, Restart, Block, Unblock, Heal)
     run the checkers
 
-step_node(id, input):
-    if the node is crashed: drop the input
-    for each Send { to, message } the node returns:
+step_host(id, input):
+    if the host's node is crashed: drop the input
+    effects = host.step(clock.now(), input)
+    for each Send { to, message }:
         let the network decide: drop, or push Deliver at now + delay (and perhaps a second copy)
-    if node.next_wake() changed: push a Wake
+    if host.wake_to_schedule() is Some(at): push a Wake at `at`
 ```
 
-### 11.4 What a real runtime would do instead
+### 11.4 What a production host does instead
 
-The same `step_node`, for one node, driven by a socket and a timer instead of a queue: read a message or wait until `next_wake`, call `step` with the machine's time, save the node's durable state, then write each `Send` to the socket for its address. Nothing in the node changes. That is the whole point of the split, and ticket H6 is the test of it.
+The same job as `SimHost`, for one node, with nothing shared: read a message from the socket or wait until `next_wake`, call `step` with the machine's time, save the node's durable state to its file, then write each `Send` to the socket for its address. There is no `Sim`, because the real network and the operating system already do what it does. Nothing in the node changes. That is the whole point of the split, and ticket H6 is the test of it.

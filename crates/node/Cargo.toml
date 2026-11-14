@@ -1,6 +1,6 @@
 [package]
 name = "node"
-description = "The participants of the system: the Node trait, and (from Phase 2) the replica and the controllers."
+description = "The participants of the system: the Node trait, and (from Phase 2) the replica and the group client."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
