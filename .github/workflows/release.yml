@@ -1,0 +1,152 @@
+name: Release
+
+# Pushing a tag `vX.Y.Z` publishes that version: binaries for five platforms
+# and the Helm chart on the GitHub release, the container image and the
+# chart (as an OCI artifact) on ghcr.io.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  test:
+    name: Pre-release test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Reads rust-toolchain.toml.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --locked
+
+  release:
+    name: Create GitHub release
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$TAG" --title "Airport Simulator ${TAG#v}" --generate-notes --verify-tag
+
+  binaries:
+    name: Binaries (${{ matrix.target }})
+    needs: release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - run: rustup target add ${{ matrix.target }}
+      - name: Build
+        env:
+          # Shown by `airport-server --version`.
+          AIRPORT_SIM_VERSION: ${{ github.ref_name }}
+        run: cargo build --release --locked --target ${{ matrix.target }} -p airport-sim -p airport-server
+      - name: Package
+        id: package
+        run: |
+          name="airport-simulator-$TAG-${{ matrix.target }}"
+          mkdir "$name"
+          cp README.md LICENSE "$name/"
+          for binary in airport-sim airport-server; do
+            cp "target/${{ matrix.target }}/release/$binary${{ runner.os == 'Windows' && '.exe' || '' }}" "$name/"
+          done
+          if [ "${{ runner.os }}" = Windows ]; then
+            archive="$name.zip"
+            7z a "$archive" "$name"
+          else
+            archive="$name.tar.gz"
+            tar czf "$archive" "$name"
+          fi
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$archive" > "$archive.sha256"
+          else
+            shasum -a 256 "$archive" > "$archive.sha256"
+          fi
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "${{ steps.package.outputs.archive }}" "${{ steps.package.outputs.archive }}.sha256" --clobber
+
+  image:
+    name: Container image
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Lower-cased for us: ghcr.io/harrydayexe/airportsimulator.
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  chart:
+    name: Helm chart
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Package
+        run: |
+          helm lint deploy/helm/airport-simulator
+          helm package deploy/helm/airport-simulator --version "${TAG#v}" --app-version "${TAG#v}"
+      - name: Push to ghcr.io
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "${{ github.token }}" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+          helm push "airport-simulator-${TAG#v}.tgz" "oci://ghcr.io/$owner/charts"
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "airport-simulator-${TAG#v}.tgz" --clobber
