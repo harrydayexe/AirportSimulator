@@ -11,11 +11,38 @@ those listed before it: `det` holds the deterministic tools everything shares (t
 `Rng`, the fingerprint, identifier types such as `NodeId`, `Term` and `Index`, and the
 values a Raft node exchanges with the host, such as `Durable`, `Input` and `Effect`); `airport`
 is the pure state machine and knows nothing of replicas,
-networks or browsers; `raft` is the hand-written agreement logic; `host` runs every replica
-with a fake network, disk and clock; `cli` (binary `airport-sim`) and `wasm` are thin
-wrappers around `host` for bulk seeded runs and for the browser. `just wasm` compiles the
+networks or browsers; `raft` is the hand-written agreement logic; `host` runs replicas
+behind the `Host` trait; `cli` (binary `airport-sim`) and `wasm` are thin
+wrappers for the command line and the browser; `server` (binary `airport-server`) is one
+real replica. `just wasm` compiles the
 `wasm` crate and writes JS bindings to `web/src/wasm/` (generated, not committed), which
 `web/src/sim.ts` loads.
+
+## Simulated and production
+
+The `Node` trait (`raft`) and the `Host` trait (`host`) each have two families of
+implementation, and neither family may depend on the other:
+
+- **Simulated** (`BrowserNode`, `ChildHost`, `BrowserHost`): every replica in one program
+  on a fake network, disk and clock, for the browser and for seeded runs. Written by hand
+  as the learning part of the project; do not complete or rewrite it unless asked.
+- **Production** (`ProdNode`, `ProdHost`): one replica per machine. `ProdNode` is the
+  complete Raft logic, still pure. `ProdHost` runs one `ProdNode` and writes its durable
+  state to a `Storage` before any effect of a step is reported. Both are deterministic and
+  are tested under simulation (`crates/raft/tests/prod_node.rs`,
+  `RAFT_SEEDS=0..2000 cargo test --release -p raft --test prod_node` for more seeds).
+
+`crates/server` is the only crate that touches the real world: it reads the clock, owns
+the sockets (`transport.rs` between replicas, `http.rs` for clients) and the files
+(`storage.rs`), and drives a `ProdHost` from one thread (`server.rs`). It has its own
+`clippy.toml` with a shorter ban list for that reason; keep logic out of it.
+`crates/server/tests/cluster.rs` runs three real processes and requires the same outputs
+and fingerprint as `airport::scenario::run`.
+
+Deployment lives in `Dockerfile`, `docker-compose.yml` (three replicas on one machine) and
+`deploy/helm/airport-simulator` (a StatefulSet, one replica per node). Pushing a tag
+`vX.Y.Z` runs `.github/workflows/release.yml`: binaries and the chart on the GitHub
+release, the image and chart on ghcr.io.
 
 ## The airport crate
 
@@ -41,7 +68,7 @@ run after every `apply`/`step` in debug builds and tests, or in release with the
 Simulation code must be deterministic. `clippy.toml` and `[workspace.lints]` in `Cargo.toml`
 ban the real clock, `HashMap`/`HashSet`, threads, locks and float arithmetic; use `BTreeMap`,
 integer milliseconds, and avoid `usize` in saved state. Don't silence these lints; extend the
-ban list in `clippy.toml` instead. Rust is pinned in `rust-toolchain.toml`.
+ban list in `clippy.toml` instead. Rust is pinned in `rust-toolchain.toml` (and as `RUST_VERSION` in the `Dockerfile`).
 
 `missing_docs` is on and clippy's `pedantic` group warns, so every public item, field and
 variant needs a doc comment, and `just check` (which denies warnings) fails without one.
@@ -59,6 +86,9 @@ variant needs a doc comment, and `just check` (which denies warnings) fails with
 | `just dev` | Rebuild wasm, then serve the web app at http://localhost:3000 |
 | `just wasm` | Rebuild only the wasm bindings (rerun after Rust changes) |
 | `just run ARGS` | Run the CLI, e.g. `just run demo --seed 7` (`just run` alone prints usage) |
+| `just server ARGS` | Run one production replica (`just server --help` for options) |
+| `just up` | Build the image and run three replicas with Docker Compose |
+| `just image` / `just check-chart` | Build the container image / lint and render the Helm chart |
 | `just fmt` / `just clean` | Format Rust / remove build outputs |
 
 Run `just --list` for everything, grouped by setup, build, run, test and check.
