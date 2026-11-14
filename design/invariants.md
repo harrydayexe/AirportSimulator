@@ -181,7 +181,9 @@ Written for the field types the spec's section 11.11 asks for (`prev_term: Term`
 
 S2 is retired: `Seeds::child` was removed with the nested hosts. Every generator in a run now comes straight from the one root, by `Stream`.
 
-### Not written yet (spec tickets A3, C2, C3, D1 to D4, for when the code lands)
+### `host.rs` and the nodes (spec tickets A3, C2, C3, D1 to D4)
+
+H1, H3, H4 and H5 are asserted in `Host` today. The rest are for when the code lands.
 
 | ID | Function | Kind | Invariant |
 |---|---|---|---|

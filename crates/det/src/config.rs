@@ -4,7 +4,7 @@ use crate::Ms;
 
 /// A Raft member's settings, such as its election timeout and heartbeat
 /// interval. Empty until the timing rules are written.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Config {
     /// The expected interval between heartbeats from the leader.
     pub heartbeat_interval: Ms,

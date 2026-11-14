@@ -45,7 +45,7 @@ The first version of this spec treated the host as the finished product: one pro
 
 What this changed in the tickets: A3 is new; B1 to B6 say "member" where they said "node"; C2 and C3 are restated for nodes of any kind; D1 moves out of the `host` crate; D3 becomes the `LocalController`; D4 (the scenario driver) is new; H6 is new.
 
-### Where the code stands (after commit `4c378ed` and this revision)
+### Where the code stands (after commit `8e511bb` and this revision)
 
 | Ticket | State |
 |---|---|
@@ -54,11 +54,11 @@ What this changed in the tickets: A3 is new; B1 to B6 say "member" where they sa
 | B1 | Mostly done. `raft::Member<C>` can be created, stepped and turned back into its `Durable`, with its invariants checked after every step. `Status` is still a placeholder with one variant. |
 | B2 | Started. The term rule, vote granting and vote counting are written. `start_election`, `become_leader` and `send_refusal` are `todo!()`. `RequestVote` does not yet carry the candidate's last log position and term, and a grant does not compare logs. |
 | B3 to B6 | Not started. `AppendEntries` and `AppendReply` exist as message shapes only. There is no commit position yet. |
-| C1 | `Clock`, `EventQueue` and `Seeds` are done and tested. The loop itself (`Host::step`) is `todo!()`. |
-| C2 | `host::Host<N>` exists as a skeleton: fields, signatures, and the steps written as comments. |
+| C1 | Done: `Clock`, `EventQueue`, `Seeds` and the loop in `Host::step`, all tested. |
+| C2 | The host half is done: `host::Host<N>` runs any nodes on the perfect network and schedules their wakes, tested with two toy nodes. The second half of "done when" (three replicas elect a leader) waits for B2 and the first cut of D1. |
 | Everything else | Not started. |
 
-Two things were removed from the code in this revision, because they belonged to the old picture. The `raft::Node` trait with its `BrowserNode` implementation became the one concrete `raft::Member`: there must not be a browser version and a production version of the agreement logic, or the demo demonstrates nothing. The `Host` trait with `ChildHost` and `BrowserHost` (hosts nested inside hosts, each with its own queue) became the one flat `Host`: grouping is now the controllers' job, and a controller is a node, not a piece of the simulator.
+Two things were removed from the code in this revision, because they belonged to the old picture. The `raft::Node` trait with its `BrowserNode` implementation became the one concrete `raft::Member`: there must not be a browser version and a production version of the agreement logic, or the demo demonstrates nothing. The `Host` trait with `ChildHost` and `BrowserHost` (hosts nested inside hosts, each with its own queue) became the one flat `Host`: grouping is now the controllers' job, and a controller is a node, not a piece of the simulator. The event handling written for `ChildHost` was carried over into `Host` unchanged in substance. The one part with no new home yet is the loop that built each Raft participant with its peers and its generator: the host can no longer do that, because it does not know what kind of node it is running. It comes back as the run builder in ticket D4.
 
 ## 3. Phase 2 on one page
 
