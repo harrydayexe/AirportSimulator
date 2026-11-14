@@ -1,0 +1,10 @@
+# This crate is the one place the real world gets in: it reads the real clock,
+# opens sockets and runs threads, and feeds what it sees to the deterministic
+# crates as plain values. So it has its own, shorter ban list instead of the
+# workspace one (../../clippy.toml). Nothing deterministic belongs here: put
+# logic in `raft` or `host`, where the full ban applies and it can be tested
+# under simulation.
+disallowed-types = [
+  { path = "std::collections::HashMap", reason = "iteration order varies per run: use BTreeMap" },
+  { path = "std::collections::HashSet", reason = "iteration order varies per run: use BTreeSet" },
+]
