@@ -9,6 +9,7 @@ pub mod fingerprint;
 pub mod ids;
 pub mod objects;
 pub mod rng;
+pub mod seq;
 
 pub use config::Config;
 pub use fingerprint::{Fnv1a, fingerprint};
