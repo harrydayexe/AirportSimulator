@@ -7,6 +7,7 @@ It was revised after work began, to change what a "node" and a "host" are and to
 ## 1. How to use this document
 
 - **Each ticket stands on its own.** It says what to build, the rules it must obey, and how you know it is finished. You should not need to scroll back to understand one.
+- **The tickets are done in one fixed order**, given in section 6 and repeated as the step number on each ticket. A ticket uses only what earlier steps built, and can be finished completely at its step. If you find a ticket asking for something that does not exist yet, that is a mistake in this document.
 - **Each ticket is marked "by hand" or "fine to delegate".** By hand means it is distributed-systems logic and the point of the project. Fine to delegate means plumbing that Claude Code can do without taking any of the learning away.
 - **The tickets give rules and tests, not solutions.** Where a ticket lists rules, they are the published rules of Raft, restated in this project's words. How to structure the code that obeys them is left to you.
 - **One section is marked as a spoiler.** Ticket E4 names the classic mistakes people make when writing Raft. Skip that list until your implementation passes everything else, if you would rather find them yourself.
@@ -44,19 +45,17 @@ The first version of this spec treated the host as the finished product: one pro
 - **"Node" no longer means "a participant in Raft".** That is now a **Raft member**, the agreement logic inside a replica.
 - **There is no controller per airport.** The first version had a "client" that existed only in the host. Its real work (number each command, find the leader, resend until answered) is needed by anything that talks to an airport, so it is now a small reusable piece, the **group client**, and not a node. In Phase 2 the scenario driver holds one. In Phase 4 the region's air traffic control will hold one per airport.
 
-What this changed in the tickets: A3 is new; B1 to B6 say "member" where they said "node"; piece C is rebuilt around one host per node and a shared simulation; D1 moves out of the `host` crate; D3 becomes the group client; D4 (the scenario driver) is new; H6 is new.
+What this changed in the tickets: A3 is new; B1 to B6 say "member" where they said "node"; piece C is rebuilt around one host per node and a shared simulation; the replica moves out of the `host` crate; D3 becomes the group client; D4 (the scenario driver) is new; H6 is new. The tickets were also put in one strict order (section 6), which split D1 and E1 in two and moved some rules to the ticket where the thing they describe is first built.
 
 ### Where the code stands (after commit `8e511bb` and this revision)
 
 | Ticket | State |
 |---|---|
 | A1, A2 | Done. `det` holds `Rng`, the fingerprint and the identifier types (plus `Ms`). It also holds the values a Raft member exchanges with its replica (`Durable`, `Input`, `Effect`, `Message`). |
-| A3 | The `node` crate and the `Node` trait exist. The system's `Message` type does not. |
-| B1 | Mostly done. `raft::Member<C>` can be created, stepped and turned back into its `Durable`, with its invariants checked after every step. `Status` is still a placeholder with one variant. |
+| A3 | `Node`, `Input` and `Effect` exist. `Request`, `ClientReply` and `Message` do not, and nor does the dependency check. |
+| B1 | Done but for one thing: `Status` is a placeholder with one variant, and should report the role and the term. |
 | B2 | Started. The term rule, vote granting and vote counting are written. `start_election`, `become_leader` and `send_refusal` are `todo!()`. `RequestVote` does not yet carry the candidate's last log position and term, and a grant does not compare logs. |
-| B3 to B6 | Not started. `AppendEntries` and `AppendReply` exist as message shapes only. There is no commit position yet. |
-| C1 | Done: `Clock`, `EventQueue`, `Seeds` and the loop in `Sim::step`, all tested. |
-| C2 | The host half is done: a `SimHost<N>` per node, plugged into one `Sim<N>` that plays the perfect network and schedules wakes, tested with two toy nodes. The second half of "done when" (three replicas elect a leader) waits for B2 and the first cut of D1. |
+| C1, C2 | Done: `Clock`, `EventQueue`, `Seeds`, and a `SimHost<N>` per node plugged into one `Sim<N>` on the perfect network, tested with two toy nodes. |
 | Everything else | Not started. |
 
 Three things in the code were reshaped in this revision, because they belonged to the old picture.
@@ -195,55 +194,60 @@ Each of these could have gone another way. They are fixed here so the tickets fi
 - **Tying airport time to host time**, the speed dial, and injecting events from a person. Phase 3.
 - **Performance work** such as sending several entries per message as a tuned batch, or sending the next message before the previous one is acknowledged. Do the simplest correct thing.
 
-## 6. Suggested order
+## 6. The order to build in
 
-The pieces are grouped by subject in section 7, but that is not the best order to build them in. This order gets something visibly running early and adds one hard idea at a time.
+The tickets are grouped by subject in section 7, but they are built in the order below. Every ticket uses only what the steps before it built, and nothing is left half done to come back to. Two tickets from the first version were split in two for this reason (D1 into D1a and D1b, E1 into E1a and E1b).
 
-1. **A1, A2, A3.** Groundwork.
-2. **B1, C1, D1 (first cut), C2.** An empty member, a replica that does nothing but run it, the event loop, and a host per replica on a perfect network. Three replicas that exchange nothing yet.
-3. **B2, C6, E1 (the first rule only).** Elections. You can now watch a leader get elected in the trace, and a checker confirms there is never more than one.
-4. **B3, B4, B5.** Logs are copied, repaired and committed.
-5. **D1 (the rest), D3, D4.** An airport behind each member, the group client, and a driver that uses it to play a scenario. On a perfect network the final fingerprint should match Phase 1.
-6. **E1 (the rest), E2.** The full set of checkers. Everything should pass on a perfect network.
-7. **C3, B6.** Crashes and restarts.
-8. **C4, C5.** Lost, late and repeated messages, split networks, and a seeded schedule of faults. This is where the bugs appear.
-9. **D2.** Duplicate filtering. The checkers from step 6 will already be failing without it.
-10. **E3, E4.** Progress after faults clear, and proof that the checkers can catch real mistakes.
-11. **F1 to F3, G1 to G2.** Bulk runs, automation and the web view.
+| Step | Ticket | What you have afterwards |
+|---|---|---|
+| 1 to 3 | A1, A2, A3 | Shared tools, identifiers, the `Node` trait and every message type. |
+| 4 | B1 | A Raft member that can be created and stepped, and does nothing. |
+| 5, 6 | C1, C2 | The simulation's clock and queue, and a host per node on a perfect network, shown working with toy nodes. |
+| 7 | B2 | Elections, tested by hand without the simulation. |
+| 8 | D1a | A replica that carries its member's messages. Three of them elect a leader in the simulation. |
+| 9, 10 | C6, E1a | A trace you can read, and a checker that confirms there is never more than one leader in a term. |
+| 11 to 14 | B3, B4, B5, B6 | Logs are copied, repaired and committed, and a member survives being rebuilt. |
+| 15 | D1b | An airport behind each member. Requests are answered. |
+| 16, 17 | D3, D4 | The group client, and a driver that uses it to play a scenario. On the perfect network the final fingerprint matches Phase 1. |
+| 18 | D2 | Duplicate filtering, before anything can cause a request to be sent twice. |
+| 19 | C3 | Crashes and restarts. |
+| 20, 21 | E1b, E2 | The full set of checkers, all passing on the perfect network. |
+| 22, 23 | C4, C5 | Lost, late and repeated messages, split networks, and a seeded schedule of faults. This is where the bugs appear. |
+| 24, 25 | E3, E4 | Progress after faults clear, and proof that the checkers can catch real mistakes. |
+| 26 to 30 | F1, F2, F3, G1, G2 | Bulk runs, automation and the web view. |
 
 ## 7. Tickets
 
 ### A. Groundwork
 
 #### A1. Move the shared tools into their own crate
-*Fine to delegate · Needs: nothing · Small*
+*Fine to delegate · Step 1 · Needs: nothing · Small*
 
 **Build.** A new crate (suggested name `det`, for "deterministic") holding `Rng` and the fingerprint code, both moved unchanged from `airport`. `airport` re-exports them so nothing else has to change.
 
 **Done when.** All existing tests pass untouched, including the web test that compares the native and WebAssembly builds, and `raft` can use `Rng` without depending on `airport`.
 
 #### A2. Identifier types
-*Fine to delegate · Needs: nothing · Small*
+*Fine to delegate · Step 2 · Needs: nothing · Small*
 
 **Build.** Small wrapper types so that different kinds of number cannot be mixed up: a node identifier, a client identifier, an election term, and a log position. A node identifier is the address of any node. A Raft member has no identifier of its own: it goes by the identifier of the replica it is in. All fixed-width, none `usize`, all deriving `Hash`, `Ord` and the serde traits.
 
 **Done when.** They exist and it is a compile error to pass a log position where an election term is expected.
 
-#### A3. The `Node` trait and the `node` crate
-*By hand · Needs: A2 · Small*
+#### A3. The `Node` trait and the messages nodes exchange
+*By hand · Step 3 · Needs: A2 · Small*
 
-**Build.** A new crate, `node`, that holds the participants of the system. In this ticket it holds only the interface between a node and its host, and the one message type nodes exchange. A suggested shape, signatures only:
+**Build.** A new crate, `node`, that holds the participants of the system. In this ticket it holds only types: the interface between a node and its host, and everything nodes say to each other. No behaviour. A suggested shape, signatures only:
 
 ```rust
+// The interface between a node and its host.
 pub enum Input<M> {
     Wake,                                   // a time you asked to be woken at has passed
     Message { from: NodeId, message: M },
 }
-
 pub enum Effect<M> {
     Send { to: NodeId, message: M },
 }
-
 pub trait Node {
     type Message;
     fn id(&self) -> NodeId;
@@ -251,35 +255,44 @@ pub trait Node {
     fn next_wake(&self) -> Option<Ms>;      // when the host should send the next Wake
 }
 
-/// Everything one node can say to another. Grows as the tickets land.
+// What a client asks of an airport, and the answer.
+pub struct Request { pub client: ClientId, pub seq: u64, pub command: Command }
+pub enum ClientReply {
+    Done { seq: u64, outputs: Vec<Output> },
+    NotLeader { hint: Option<NodeId> },
+}
+
+// Everything one node can say to another.
 pub enum Message {
-    Raft(det::objects::Message<Request>),   // replica to replica, same group (D1)
-    Request(Request),                       // client to a replica (D2)
-    Reply(ClientReply),                     // replica to the client that asked (D2)
+    Raft(det::objects::Message<Request>),   // one replica to another in the same airport
+    Request(Request),                       // a client to a replica
+    Reply(ClientReply),                     // a replica to the client that asked
 }
 ```
 
+**What the types mean.** `Command` and `Output` are the airport's own, from Phase 1. A `Request` is a command together with who is asking (`client`) and that asker's own count of its requests (`seq`). It is the thing the replicas will agree on, which is why `Message::Raft` carries Raft messages whose command type is `Request`. `ClientReply` answers one request, naming its `seq`: either the airport's outputs, or "I am not the leader", with a guess at who is.
+
 **Rules.**
 - A node is written as if it ran alone on its own machine. It never reads a clock, opens a connection, touches a disk, starts a thread, or holds a reference to another node. Everything comes in through `step` and goes out as effects.
-- `Node` is the whole interface between a node and its host. The host calls the node. The node never calls the host and cannot tell which kind of host it has.
+- `Node` is the whole interface between a node and its host. The host calls the node. The node never calls the host and cannot tell what kind of host it has.
 - `step` must be harmless for a `Wake` that arrives early or late, and `next_wake` is a pure read.
 - `node` depends on `det`, `airport` and `raft`. Neither it nor anything it depends on may depend on `host`.
-- There is one implementation of each node. Nothing in `node` or `raft` is compiled differently for the browser.
+- Nothing in `node` or `raft` is compiled differently for the browser.
 
-**Done when.** A toy node written in a test (for example one that answers every message with the same message) implements the trait, and a check in `just check` fails if `det`, `airport`, `raft` or `node` gains a dependency on `host`.
+**Done when.** The types exist and derive what `det`'s types derive. A toy node written in a test (for example one that answers every message with the same message) implements the trait. A check in `just check` fails if `det`, `airport`, `raft` or `node` gains a dependency on `host`.
 
 ### B. Raft
 
 Everything in this piece lives in `crates/raft`, is pure logic, and is tested without the host by a few lines of test code that hand messages from one member to another.
 
-A **member** is the agreement logic of one replica. It is not a node: it has no address of its own, and it is the replica around it that implements `Node`, receives messages from its host and hands the Raft ones in. `raft` knows nothing of nodes, hosts or airports, only of the other members of its group.
+A **member** is the agreement logic on its own. It is not a node: it does not implement `Node`, and it is stepped directly by whatever holds it. In this piece that is test code. `raft` knows nothing of nodes, hosts or airports, only of the other members of its group, which it names by `NodeId`.
 
 One principle applies to every ticket here. **The network may deliver any message late, twice, out of order, or not at all.** Every handler must do the right thing in all four cases. A reply is just another message: there is no guarantee it arrives, and no guarantee it is the reply to the thing you sent most recently.
 
 #### B1. The member's skeleton
-*By hand · Needs: A1, A2 · Small*
+*By hand · Step 4 · Needs: A1, A2 · Small*
 
-**Build.** The member type and its interface, with no behaviour yet. It is one concrete type, `raft::Member<C>`, not a trait: the same code runs behind every kind of host. A suggested shape, signatures only:
+**Build.** The member type and its interface, with no behaviour yet. It is one concrete type, `raft::Member<C>`, not a trait: there is only ever one implementation of it. A suggested shape, signatures only:
 
 ```rust
 pub enum Payload<C> { Noop, Command(C) }
@@ -295,7 +308,7 @@ pub struct Durable<C> {
 pub enum Input<C> {
     Wake,                                        // a time you asked to be woken at has passed
     Message { from: NodeId, message: Message<C> },
-    Propose(C),                                  // the replica wants this command stored
+    Propose(C),                                  // whoever holds the member wants this command stored
 }
 
 pub enum Effect<C> {
@@ -309,60 +322,67 @@ impl<C: Clone + Eq> Member<C> {
     pub fn step(&mut self, now: Ms, input: Input<C>) -> Vec<Effect<C>>;
     pub fn next_wake(&self) -> Option<Ms>;       // when the member next needs a Wake
     pub fn into_durable(self) -> Durable<C>;     // what is left after a crash
-    pub fn status(&self) -> Status;              // role, term, positions: for checkers and the web view
-    pub fn log(&self) -> &[Entry<C>];            // read-only, for checkers
+    pub fn status(&self) -> Status;              // a read-only summary: for now, role and term
+    pub fn log(&self) -> &[Entry<C>];            // read-only
 }
 ```
 
 **Rules.**
 - A member starts as a follower in whatever election term its `Durable` says, which is 0 for a brand new member.
-- Inside the member, split state clearly into what is in `Durable` and what is not. Role, the commit position, the list of who voted, and what a leader knows about its followers are all lost on a crash.
+- Inside the member, split state clearly into what is in `Durable` and what is not. Only `Durable` survives a crash. The role does not. Every later ticket that adds state to the member must put it on one side or the other.
+- `Message<C>` needs nothing in it yet beyond the sender's election term.
 - A `Wake` that arrives early or late must be harmless. The member checks the time itself.
 
 **Done when.** A member can be created, stepped with any input without panicking, and turned back into its `Durable`.
 
 #### B2. Elections
-*By hand · Needs: B1 · Medium*
+*By hand · Step 7 · Needs: B1 · Medium*
 
-**Build.** The two election messages (a request for a vote, and the reply) and the role changes between follower, candidate and leader.
+**Build.** Three messages and the role changes between follower, candidate and leader. The messages are a request for a vote, the reply to it, and the heartbeat a leader sends to say it exists. (In the code the heartbeat is `AppendEntries` with no entries. In this ticket a follower looks only at its term.)
 
 **Rules.**
-- **Timing.** A follower or candidate that goes a full election timeout without hearing from a leader or granting a vote starts an election. The timeout is chosen at random each time it is reset, between one and two times a base value from `Config`.
+- **Timing.** A follower or candidate that goes a full election timeout without receiving a heartbeat or granting a vote starts an election. The timeout is chosen at random each time it is reset, between one and two times a base value from `Config`.
 - **Starting an election.** Add one to the election term, vote for yourself, and ask every other member for its vote. The request states your term and the term and position of the last entry in your log.
 - **Higher term seen.** Any message, of any kind, carrying a higher election term than your own makes you adopt that term, forget who you voted for, and become a follower, before you handle the message.
-- **Lower term seen.** A request carrying a lower election term than your own is refused, and the refusal states your term.
+- **Lower term seen.** A vote request carrying a lower election term than your own is refused, and the refusal states your term. A heartbeat or a vote reply carrying a lower term is dropped.
 - **Granting a vote.** Grant it only if you have not already voted for someone else in this election term, and the candidate's log is at least as up to date as yours. "Up to date" compares the term of the last entry first, and the length of the log second.
-- **Winning.** A candidate that holds votes from a majority, counting its own, becomes leader for that election term and immediately tells everyone.
-- **Losing.** A candidate that hears from a leader whose term is at least its own becomes a follower.
+- **Winning.** A candidate that holds votes from a majority, counting its own, becomes leader for that election term and sends a heartbeat to every other member at once.
+- **Heartbeat.** A leader sends every other member a heartbeat at a regular interval from `Config`. This is what stops followers starting elections.
+- **Losing.** A candidate that receives a heartbeat whose term is at least its own becomes a follower.
+- **Remembering the leader.** A member remembers who sent the last heartbeat it accepted, and forgets it when its term changes.
+- **Proposals.** No member accepts a `Propose` yet. It is answered with `NotLeader`, naming the remembered leader if there is one.
+- `status()` reports the role and the election term.
 
-**Tests.**
+**Tests.** No log can be built by proposing yet, so where a test needs entries in a log, put them in the member's `Durable` when you create it.
 - Three members, messages handed over by hand: one times out, the other two vote, it becomes leader.
 - Two candidates in the same term: at most one wins.
 - A member that has voted refuses a second candidate in the same term, and grants the same candidate again if asked twice.
 - A candidate with a shorter log is refused by a member with a longer one.
 - A cluster of one elects itself.
 - A vote reply from an earlier election term changes nothing.
+- While heartbeats are delivered, followers never time out.
+- A `Propose` to a follower returns `NotLeader` naming the leader.
 
 #### B3. Copying the log
-*By hand · Needs: B2 · Medium*
+*By hand · Step 11 · Needs: B2 · Medium*
 
-**Build.** The message a leader uses to send entries to a follower, its reply, and `Propose`.
+**Build.** Entries in the heartbeat, a reply to it, and `Propose` on a leader.
 
 **Rules.**
-- **Heartbeat.** A leader sends every follower a message at a regular interval from `Config`, whether or not there is anything new to send. This is what stops followers starting elections.
-- **Proposing.** A leader given a `Propose` adds the command to the end of its own log, stamped with its election term. Any other member answers `NotLeader`, with the leader it last heard from if it knows one.
-- **What the message says.** The leader's term; the position and term of the entry just before the ones being sent; the entries; and the leader's commit position.
-- **The consistency check.** A follower accepts the message only if its own log has an entry at that "just before" position with that same term. Otherwise it refuses.
-- **What the leader tracks.** For each follower: the next position to send, and the highest position it knows that follower holds.
+- **Proposing.** A leader given a `Propose` adds the command to the end of its own log, stamped with its election term, and sends it on. Any other member still answers `NotLeader`.
+- **What the message says.** The leader's term; the position and term of the entry just before the ones being sent; and the entries, which may be none. A message with no entries is the heartbeat of B2.
+- **The consistency check.** A follower accepts the message only if its own log has an entry at that "just before" position with that same term, or the position is 0. Otherwise it refuses. Either way it replies, and an acceptance says how far its log now matches the leader's. A message with a lower term than the follower's is now refused too, with a reply that states the follower's term, where B2 dropped it.
+- **Accepting.** In this ticket, test only followers whose logs agree with the leader's as far as they go, so accepted entries are simply added at the end.
+- **What the leader tracks.** For each follower: the next position to send, and the highest position it knows that follower holds. The second only ever goes up. In this ticket the leader does nothing with a refusal.
 
 **Tests.**
 - A proposal to the leader appears in all three logs after the messages are handed over.
 - A proposal to a follower returns `NotLeader` with the right hint.
-- With no proposals, followers never time out while heartbeats are delivered.
 - Entries sent to a follower with an empty log are accepted from position 1.
+- A reply delivered twice, or after a later reply, does not move what the leader believes backwards.
 
 #### B4. Repairing a log that has diverged
-*By hand · Needs: B3 · Medium*
+*By hand · Step 12 · Needs: B3 · Medium*
 
 **Build.** What happens when a follower's log does not match the leader's.
 
@@ -378,9 +398,9 @@ impl<C: Clone + Eq> Member<C> {
 - The six follower logs in Figure 7 of the Raft paper all end up identical to the leader's.
 
 #### B5. Commitment, and handing entries over to be applied
-*By hand · Needs: B4 · Medium*
+*By hand · Step 13 · Needs: B4 · Medium*
 
-**Build.** The rule for when an entry is safe forever, and the `Committed` effect.
+**Build.** The rule for when an entry is safe forever, a commit position on every member, and the `Committed` effect. The leader's message gains one field, its commit position, and `status()` gains the member's commit position.
 
 **Rules.**
 - **Leader.** A position is committed once a majority of members, counting the leader, hold the entry at that position, **and** that entry is from the leader's own current election term. Everything before a committed position is committed too.
@@ -396,9 +416,9 @@ impl<C: Clone + Eq> Member<C> {
 - After a new leader is elected with no new proposals, leftover entries become committed because of the empty entry.
 
 #### B6. Surviving a crash
-*By hand · Needs: B5 · Small*
+*By hand · Step 14 · Needs: B5 · Small*
 
-**Build.** Nothing new, if B1's split was done properly. This ticket is the check that it was.
+**Build.** Nothing new, if B1's split was done properly. This ticket is the check that it was. A "crash" here is just `into_durable` followed by `Member::new`, in a test.
 
 **Rules.**
 - A member rebuilt from its `Durable` is a follower, with a commit position of 0, that remembers its election term, who it voted for in that term, and its whole log.
@@ -421,33 +441,33 @@ Anything that concerns one node belongs in `SimHost`. Anything that concerns the
 This piece is generic plumbing in one sense, but its fault injection is half of what makes the project "like TigerBeetle", so most of it is marked by hand.
 
 #### C1. The event loop and the clock
-*By hand · Needs: A1 · Small*
+*By hand · Step 5 · Needs: A1 · Small*
 
-**Build.** The to-do list at the centre of the `Sim`: events ordered by simulated time, and a loop that takes the earliest, moves the clock to it, and hands it to the host it is for.
+**Build.** The to-do list at the centre of the `Sim`: events ordered by simulated time, a clock, and the seeds. The loop that takes the earliest event and moves the clock to it. The queue is generic over what an event is.
 
 **Rules.**
 - Two events at the same simulated time are handled in the order they were added. This must be explicit, not an accident of the data structure.
 - Simulated time never goes backwards.
-- All randomness comes from generators derived from one seed. Use a separate generator for each purpose (network, faults, each life of each node), each derived from the seed, so that changing the fault settings does not change the message delays.
-- There is one clock and one queue for the whole run. They belong to the `Sim`, never to a host, and only the `Sim` moves the clock.
+- All randomness comes from generators derived from one seed. Each purpose gets its own generator, derived from the seed and a name for the purpose, so that asking for a new one never changes the numbers an existing one gives.
+- There is one clock and one queue for the whole run, and only the loop moves the clock.
 
 **Done when.** A test schedules events out of order and sees them handled in time order, with ties in insertion order, and the same seed gives the same sequence twice.
 
 #### C2. A host per node, on a perfect network
-*By hand · Needs: C1, A3 · Small*
+*By hand · Step 6 · Needs: C1, A3 · Small*
 
 **Build.** `SimHost`, which runs one node, and the `Sim`'s perfect network. The `Sim` is handed a set of nodes and gives each a host. When a node emits `Send`, its host passes the message to the `Sim`, which schedules a delivery a fixed short time later. When a node's `next_wake` changes, its host asks the `Sim` for a `Wake`.
 
 **Rules.**
-- `SimHost` and `Sim` are generic over `Node`. They do not know what a replica is, and can be tested with toy nodes.
+- `SimHost` and `Sim` are generic over `Node`. They know nothing about what their nodes do, and are tested with toy nodes.
 - Nodes never hold references to each other, to their host or to the `Sim`. Messages are values that move through the event list.
 - Any node may send to any other node of the run. A `Send` to an address the `Sim` was never given is a bug in the sender, and fails loudly.
 - A `Wake` scheduled for a time the node no longer cares about is delivered anyway and ignored by the node.
 
-**Done when.** Two toy nodes pass a message back and forth in a test. Then, with B2 and the first cut of D1 in place, three replicas on the perfect network elect exactly one leader and keep it.
+**Done when.** Two toy nodes pass a message back and forth in a test, at the times the fixed delay predicts.
 
 #### C3. The fake disk, crashes and restarts
-*By hand · Needs: C2, B6, D1 · Small*
+*By hand · Step 19 · Needs: D2, D4, B6 · Small*
 
 **Build.** Two operations on a `SimHost`. Crash: take the node's durable state, keep it, and discard the node. Restart: build a new node from the kept state, with a new generator derived from the seed. `Node` gains whatever a host needs to do this for any node (suggested: an associated `Durable` type, `into_durable(self)`, and a function given to the host that builds a node from an id, its durable state, a generator and the time).
 
@@ -455,14 +475,15 @@ This piece is generic plumbing in one sense, but its fault injection is half of 
 - The kept state and the count of lives belong to the node's host: this is its fake disk. A host outlives its node.
 - Messages addressed to a crashed node are dropped when they would have been delivered.
 - A `Wake` for a crashed node is dropped. One left over from before the crash that fires after a restart is harmless.
-- A replica's durable state is its member's `Durable` and nothing else. The airport and the duplicate table are discarded on a crash and rebuilt from the log (D1).
-- The messages a node emits in a `step` are released only after its durable state at the end of that step is saved. In a simulated host this is automatic, because the state is read out of the node at the moment of the crash. The rule is written down for the sake of a production host.
-- In Phase 2 only replicas are crashed. The driver runs for the whole run.
+- A replica's durable state is its member's `Durable` and nothing else. Everything else it holds, the airport and the duplicate table, is discarded on a crash and rebuilt from the log. D1b and D2 already built it that way.
+- The messages a node emits in a `step` are released only after its durable state at the end of that step is saved. In a simulated host this is automatic, because the state is read out of the node at the moment of the crash. The rule is written down because a host with a real disk would have to do it on purpose.
+- Only replicas are crashed. The driver runs for the whole run.
+- The trace gains two events: node crashed, and node restarted.
 
-**Done when.** Crashing the leader on the perfect network produces a new leader within a few election timeouts, and restarting the old one brings it back as a follower with a matching log.
+**Done when.** Crashing the leader on the perfect network produces a new leader within a few election timeouts, the driver's scenario still finishes with the right outputs, and restarting the old leader brings it back as a follower with a matching log and the same fingerprint.
 
 #### C4. An unreliable network
-*By hand · Needs: C2 · Medium*
+*By hand · Step 22 · Needs: E2 · Medium*
 
 **Build.** Replace the `Sim`'s fixed delay with seeded misbehaviour, controlled by settings:
 
@@ -476,11 +497,12 @@ This piece is generic plumbing in one sense, but its fault injection is half of 
 **Rules.**
 - Faults apply to every link: replica to replica, and between the driver and each replica in both directions.
 - The network belongs to the `Sim`, not to any host. It decides by address only, and never looks at what kind of node is at either end, or inside a message.
+- The trace gains four events: message dropped, message duplicated, link blocked, link unblocked.
 
 **Done when.** Unit tests show each fault doing what the table says, and the same seed produces the same pattern of faults twice.
 
 #### C5. A seeded schedule of faults
-*By hand · Needs: C3, C4 · Medium*
+*By hand · Step 23 · Needs: C4 · Medium*
 
 **Build.** A generator that turns a seed and a difficulty level into a list of timed fault events: crash this replica, restart it, block these links, unblock them. The `Sim` adds them to its event list at the start of a run.
 
@@ -493,81 +515,85 @@ This piece is generic plumbing in one sense, but its fault injection is half of 
 | Rough | Longer delays, some loss and duplication. | One replica at a time crashed or cut off, so a majority can always talk to each other and to the driver. |
 | Hostile | Delays longer than the election timeout, heavy loss and duplication. | Anything, including a majority down at once, one-directional partitions, and faults in quick succession. |
 
-- Every schedule ends with a **heal**: all replicas restarted, all links unblocked, network set to calm. The run then continues for a fixed stretch of simulated time. Ticket E3 depends on this.
+- Every schedule ends with a **heal**: all replicas restarted, all links unblocked, network set to calm. The run then continues for a fixed stretch of simulated time, so that there is a known point after which the group ought to make progress.
 - At the hostile level the group will often make no progress for long periods. That is expected. Only safety is being tested there until the heal.
+- The checkers of E1a, E1b and E2 run throughout, at every level.
 
-**Done when.** A seed and a level always produce the same schedule, and a run at each level reaches its heal.
+**Done when.** A seed and a level always produce the same schedule, and a run at each level reaches its heal with no checker failing.
 
 #### C6. The trace
-*Fine to delegate · Needs: C2 · Small*
+*Fine to delegate · Step 9 · Needs: D1a · Small*
 
-**Build.** A list of everything the `Sim` did, in order, as a serde-serialisable enum: message sent, delivered, dropped or duplicated; a member's role or election term changed; position committed; entry applied with the fingerprint afterwards; node crashed or restarted; links blocked or unblocked; the driver sent a request or received a reply.
+**Build.** A list of everything the `Sim` did, in order, as a serde-serialisable enum. In this ticket it has the events that can happen so far: message sent, message delivered, node woken, and a replica's role or election term changed.
 
 **Rules.**
-- Recording the trace must not change the run. A run with the trace switched off has the same fingerprints as one with it on.
+- Recording the trace must not change the run. A run with the trace switched off ends in the same state as one with it on.
 - The trace is the `Sim`'s. Nodes do not write to it: the `Sim` records what it sees them do (the messages they send, and what their read-only accessors show after each step).
+- Every later ticket that makes something new happen in a run adds its own events to the trace. Each such ticket says which.
 
-**Done when.** A run can print its trace as readable lines, and as JSON for the web view in piece G.
+**Done when.** A run of three replicas electing a leader can print its trace as readable lines, and as JSON.
 
 ### D. Replica and client
 
 The replica and the group client live in `crates/node`, because they are the system itself and must not depend on the simulation. The driver (D4) is the exception: it exists only to feed the simulation, so it lives in `crates/host`.
 
-#### D1. The replica
-*By hand · Needs: A3, B1 (first cut); B5 (the rest) · Medium*
+#### D1a. The replica: carrying Raft messages
+*By hand · Step 8 · Needs: A3, B2, C2 · Small*
 
-**Build.** A node that owns one Raft member and one `Airport`. It hands Raft messages and wakes to the member, turns the messages the member wants sent into `Send` effects for its host, and for every `Committed` effect it applies the entry to the airport.
-
-**First cut.** A replica that only carries Raft messages between its member and its host is enough for C2 and can be written as soon as B1 exists. Applying entries waits for B5.
+**Build.** A node, `Replica`, that owns one Raft member whose command type is `Request`. It hands `Message::Raft` messages and wakes to its member, and turns each message the member wants sent into a `Send` effect carrying `Message::Raft`.
 
 **Rules.**
-- A replica is created with its own `NodeId` and the ids of the other replicas in its group. Its member's peers are those other replicas.
-- A Raft message is accepted only from a replica of its own group. A request may come from any address.
+- A replica is created with its own `NodeId`, the ids of the other replicas of its airport, a `Config`, a `Durable` and a generator. Its member's peers are those other replicas.
+- A `Message::Raft` is accepted only from a replica of its own airport. From anyone else it is a bug in the sender, and fails loudly.
+- A `Message::Request` or `Message::Reply` is ignored in this ticket.
 - The replica never delivers anything itself. It returns effects, and its host does the sending.
+- The replica's `next_wake` is its member's.
+- It offers its member's `status()` and `log()` through read-only accessors.
+
+**Done when.** Three replicas, each behind a `SimHost` on the perfect network, elect exactly one leader and keep it.
+
+#### D1b. The replica: applying entries and answering requests
+*By hand · Step 15 · Needs: D1a, B5 · Medium*
+
+**Build.** The replica gains an `Airport`. For every `Committed` effect from its member it applies the entry's command to the airport. It also starts handling `Message::Request`.
+
+**Rules.**
 - The airport is only ever changed by applying committed entries, in order.
 - An empty entry (`Payload::Noop`) is skipped.
-- After applying each entry the replica records the position and the airport's fingerprint, and offers both through a read-only accessor for the checkers and the trace.
-- A restarted replica starts with a fresh `Airport::new` and rebuilds it as its member re-emits `Committed` from position 1.
-- The replica answers a request only if its member is the leader at the moment the entry is applied, and sends the answer to the address the request came from. It remembers that address in memory only. A new leader that never saw the request stays silent, and learns the address when the client resends.
-- The replica's `next_wake` is its member's.
+- A replica always starts with `Airport::new` and builds its airport only from `Committed` effects, from position 1. It keeps nothing about the airport anywhere else.
+- After applying each entry the replica records the position and the airport's fingerprint, and offers both through a read-only accessor.
+- **A request arrives.** The replica gives it to its member as a `Propose`. If the member answers `NotLeader`, the replica sends `ClientReply::NotLeader` with the same hint back to the sender.
+- **A request is applied.** If the replica's member is the leader at that moment, the replica sends `ClientReply::Done`, with the request's `seq` and the airport's outputs, to the address the request came from. It remembers that address in memory only, from when the request arrived. A leader that never saw the request arrive stays silent.
+- In this ticket every committed request is applied, even one that appears in the log twice.
+- The trace gains one event: entry applied, with its position and the fingerprint afterwards.
 
-**Done when.** On the perfect network with commands proposed straight to the leader, all three replicas report the same fingerprint at every position.
+**Done when.** On the perfect network, a test that sends requests straight to the leader gets a `Done` for each, and all three replicas report the same fingerprint at every position.
 
 #### D2. Filtering duplicate commands
-*By hand · Needs: D1, D3 · Medium*
+*By hand · Step 18 · Needs: D1b, D3 · Medium*
 
-**Build.** The wrapper that travels through Raft, and the table that filters repeats.
-
-```rust
-pub struct Request { pub client: ClientId, pub seq: u64, pub command: Command }
-
-pub enum ClientReply {
-    Done { seq: u64, outputs: Vec<Output> },
-    NotLeader { hint: Option<NodeId> },
-}
-```
+**Build.** A table in the replica that recognises a request it has already applied. From here on, the same request can appear in the log more than once and still change the airport once.
 
 **Rules.**
-- Raft replicates `Request` values. The airport still only ever sees the `Command` inside.
-- A `ClientId` names one group client (D3), and is given to it when it is created.
-- Each replica keeps a table with one row per client: the highest `seq` applied for that client, and the outputs that application produced.
+- Each replica keeps a table with one row per `ClientId`: the highest `seq` applied for that client, and the outputs that application produced.
 - When a committed `Request` is about to be applied:
   - If its `seq` is one more than the client's row, apply it, and store the outputs in the row.
   - If its `seq` equals the client's row, do **not** apply it. If this replica is the leader, send the stored outputs again.
   - If its `seq` is lower than the client's row, ignore it.
   - A `seq` more than one above the row cannot happen with a correct client. Treat it as a bug and fail loudly.
-- The table is changed only by applying committed entries, so it is identical on all replicas at the same position. Include it in the replica's fingerprint.
-- The table is lost in a crash and rebuilt along with the airport.
+- The table is changed only by applying committed entries, so it is identical on all replicas at the same position. Include it in the fingerprint the replica reports.
+- The table is not durable. Like the airport, it starts empty and is rebuilt from the log.
 
 **Tests.**
 - The same `Request` committed at two positions changes the airport once, and the second produces the same reply as the first.
 - A retried `RequestLanding` does not produce `Rejected: DuplicateFlight` and does not change the rejected count.
 - Two replicas given the same log, including repeats, have the same table and the same fingerprint.
+- A replica built again from the same log ends with the same table.
 
 #### D3. The group client
-*By hand · Needs: D1 · Medium*
+*By hand · Step 16 · Needs: D1b · Medium*
 
-**Build.** The code that talks to one airport group. It is given commands, gets each one agreed by the group, and hands back the outputs. It is not a node and has no address of its own. It is a plain value that a node holds and steps, the way a replica holds a Raft member, so the same code serves the driver now and region control in Phase 4.
+**Build.** The code that talks to one airport. It is given commands, gets each one agreed by the replicas, and hands back the outputs. It is not a node and has no address of its own. It is a plain value that a node holds and steps, the way a replica holds a Raft member, so that any node that needs to command an airport can use the same code. It lives in `crates/node`.
 
 A suggested shape, signatures only:
 
@@ -587,58 +613,70 @@ pub enum ClientEffect { Send { to: NodeId, request: Request }, Done { outputs: V
 - The client knows the replicas only by their `NodeId`s. It never constructs, holds or calls a replica.
 - Submitted commands are queued and handled in the order they were submitted.
 - The client has at most one request outstanding. It does not send request *n+1* until it has a `Done` reply for request *n*.
-- Each new command gets the next `seq`. A resend uses the same `seq`.
+- Each new command gets the next `seq`, starting at 1. A resend uses the same `seq`.
 - The client sends to the replica it believes is leader. On `NotLeader` it follows the hint if there is one, and otherwise tries another replica.
 - If no reply arrives within a timeout, it resends, to a different replica.
 - A reply whose `seq` is not the one outstanding is ignored.
 - `Done` is emitted once per command, in the order the commands were submitted.
-- Like a Raft member, it is told the time and never reads a clock, and it sends nothing itself: the node that holds it turns its `Send` effects into its own.
+- Like a Raft member, it is told the time and never reads a clock, and it sends nothing itself: whatever holds it turns its `Send` effects into its own.
 
-**Done when.** A test that hands messages between one group client and three replicas by hand, with no host, gets a command agreed and its outputs returned, and survives a `NotLeader` and a lost reply.
+**Done when.** A test that hands messages between one group client and three replicas by hand, with no host, gets a command agreed and its outputs returned, and survives a `NotLeader` and a reply that the test throws away.
 
 #### D4. The scenario driver
-*Fine to delegate · Needs: D3, C2 · Small*
+*Fine to delegate · Step 17 · Needs: D3, C6 · Small*
 
-**Build.** A node, in `crates/host`, that holds one group client. It is given a `Scenario`, submits its commands in order, and collects the outputs. Together with it, the function that builds a whole Phase 2 run: one driver and three replicas, each with its generator from the seed, handed to the `Sim`.
+**Build.** A node, in `crates/host`, that holds one group client. It is given a `Scenario`, submits its commands in order, and collects the outputs. Together with it, the function that builds a whole run: one driver and three replicas, each with its generator from the seed, handed to the `Sim`.
 
 **Rules.**
 - The driver is the only node that is not part of the system. It lives in `host` so that `node` holds nothing a real deployment would not ship.
-- The driver has a host like any other node, and its messages cross the same fake network, so they can be lost, delayed and duplicated too. The group client's resends are what get it through.
-- The driver does not crash in Phase 2.
-- The `Sim` now holds nodes of two kinds. How it does so (an enum, or trait objects) is up to you, but checkers must still be able to reach a replica's read-only accessors.
+- The driver has a host like any other node, and its messages cross the `Sim`'s network like any others.
+- The `Sim` now holds nodes of two kinds. How it does so (an enum, or trait objects) is up to you, but a replica's read-only accessors must still be reachable through it.
+- The trace gains two events: the driver sent a request, and the driver received a reply.
 
-**Done when.** On the perfect network, the driver plays a whole demo scenario and the outputs it collected, in order, equal `scenario::run`'s outputs for the same scenario.
+**Done when.** On the perfect network, the driver plays a whole demo scenario and the outputs it collected, in order, equal `scenario::run`'s outputs for the same scenario, and every replica's fingerprint equals `scenario::run`'s final fingerprint.
 
 ### E. Checkers
 
-The checkers run inside the `Sim` after every event. They can see inside every replica through its read-only accessors, and through those its member's `status()` and `log()`. A failure stops the run and reports the seed, the simulated time, and which rule broke.
+The checkers run inside the `Sim` after every event. They see each replica only through its read-only accessors. A failure stops the run and reports the seed, the simulated time, and which rule broke.
 
 Checkers belong to the simulation, not to the system: no node and no host knows they exist, and they are the one place allowed to look at several nodes at once.
 
 Write the checkers with the same discipline as `tests/invariants.rs` in the airport crate: they may share types with the code they check, but none of its logic.
 
-#### E1. Raft's safety rules
-*By hand · Needs: B5, C2 · Medium*
+#### E1a. One leader per term
+*By hand · Step 10 · Needs: C6 · Small*
 
-**Build.** One checker per rule. The first five are the five guarantees stated in the Raft paper.
+**Build.** The place in the `Sim` where checkers run, the way a failure is reported, and the first checker.
 
 | Rule | What must hold |
 |---|---|
 | One leader per term | No two members are ever leader in the same election term. This holds across the whole run, not just at one instant. |
+
+**How.** The checker has to remember, for the whole run, who has been leader in each term.
+
+**Done when.** A long run of three replicas on the perfect network passes, and a unit test feeds the checker a deliberately broken state and sees it fail.
+
+#### E1b. The rest of Raft's safety rules
+*By hand · Step 20 · Needs: E1a, C3 · Medium*
+
+**Build.** One more checker per rule. With E1a's rule, the first four here make up the five guarantees stated in the Raft paper.
+
+| Rule | What must hold |
+|---|---|
 | Leaders only append | While a member is leader, it never removes or changes an entry in its own log. |
 | Logs match | If two members' logs have an entry with the same term at the same position, their logs are identical from position 1 up to that position. |
 | Leaders are complete | Once an entry is committed, every member that becomes leader in a later term has it in its log. |
-| Same entry at each position | No two members ever emit `Committed` for the same position with different entries. |
+| Same entry at each position | No two replicas ever apply different entries at the same position. |
 | Terms only rise | A member's election term never decreases, including across a crash and restart. |
 | One vote per term | A member's recorded vote never changes within an election term, including across a crash and restart. |
 | Commit only rises | Within one life of a member, its commit position never decreases, and a committed entry is never removed from any log. |
 
-**How.** Several of these need the checker to remember things for the whole run: who has been leader in each term, and what has been committed at each position.
+**How.** Several of these need the checker to remember things for the whole run, such as what has been committed at each position. To see a member's vote, `status()` may need to report it.
 
-**Done when.** A long calm run passes all eight, and each has a unit test that feeds the checker a deliberately broken state and sees it fail.
+**Done when.** A long run on the perfect network that crashes and restarts each replica in turn passes all seven, and each has a unit test that feeds the checker a deliberately broken state and sees it fail.
 
 #### E2. The airport's rules, end to end
-*By hand · Needs: D1, D3, D4, E1 · Medium*
+*By hand · Step 21 · Needs: E1b · Medium*
 
 **Build.** Three checkers above the Raft level.
 
@@ -650,10 +688,10 @@ Write the checkers with the same discipline as `tests/invariants.rs` in the airp
 
 **Why the third rule is so strong.** With one client sending one request at a time, the agreed log has to contain the scenario's commands in the scenario's order. So a correct replicated run, however badly the network behaved, must end in exactly the state Phase 1 computes. And since Phase 1's own tests show that state obeys the aviation rules, there is no need to re-check separation or closures here.
 
-**Done when.** All three pass on a calm run, and the third is the final line of every run's report.
+**Done when.** All three pass on the perfect network, with and without a replica crashed and restarted part way through, and the third is the final line of every run's report.
 
 #### E3. Progress once the faults stop
-*By hand · Needs: C5, D4 · Small*
+*By hand · Step 24 · Needs: C5 · Small*
 
 **Build.** A check at the end of every run, after the heal at the end of the fault schedule.
 
@@ -665,13 +703,13 @@ Write the checkers with the same discipline as `tests/invariants.rs` in the airp
 **Done when.** A run that would otherwise sit forever with no leader is reported as a failure with its seed, not left to hang.
 
 #### E4. Proof that the checkers can catch mistakes
-*By hand · Needs: everything above · Medium*
+*By hand · Step 25 · Needs: E3 · Medium*
 
 **Build.** A set of switches, compiled only for tests, each of which breaks the implementation in one specific way. The switches sit in `raft` and `node`, where the mistakes would be made. They are the one permitted exception to "nothing is compiled differently", and they must not exist in a normal build. For each switch, a test runs seeds until a checker fails, and fails itself if none does within a fixed number of seeds.
 
 **Why.** A simulator that has never caught a bug has not been shown to work. This is the only way to know that "ten thousand seeds passed" means something.
 
-> **Spoiler.** The list below names well-known mistakes in Raft implementations. If you want to find them yourself, do not read it until your own implementation passes E1 to E3 at the hostile level.
+> **Spoiler.** The list below names well-known mistakes in Raft implementations. If you want to find them yourself, do not read it until your own implementation passes every checker at the hostile level.
 
 | Switch | The mistake |
 |---|---|
@@ -691,21 +729,21 @@ Write the checkers with the same discipline as `tests/invariants.rs` in the airp
 ### F. Bulk runs and tooling
 
 #### F1. Running many seeds from the command line
-*Fine to delegate · Needs: C5, E3 · Small*
+*Fine to delegate · Step 26 · Needs: E4 · Small*
 
 **Build.** A new `airport-sim` subcommand that runs a range of seeds at a chosen fault level against a short scenario, stops at the first failure, and prints the seed, the rule that broke, and the exact command to replay it with the trace on.
 
 **Done when.** `just` has a recipe for a quick run (a few hundred seeds) and an overnight run (as many as fit), and a deliberately broken build is reported with a seed that replays to the same failure.
 
 #### F2. Run it twice
-*Fine to delegate · Needs: F1, C6 · Small*
+*Fine to delegate · Step 27 · Needs: F1 · Small*
 
 **Build.** A test that runs the same seed twice natively and once as WebAssembly, and compares the three traces entry by entry. This extends the existing comparison in `web/src/sim.test.ts`.
 
 **Done when.** It passes for several seeds at each fault level.
 
 #### F3. Automation
-*Fine to delegate · Needs: F1, F2 · Small*
+*Fine to delegate · Step 28 · Needs: F2 · Small*
 
 **Build.** The automatic checks on every commit run a few hundred seeds at each level, plus the E4 tests.
 
@@ -714,12 +752,12 @@ Write the checkers with the same discipline as `tests/invariants.rs` in the airp
 ### G. The web view
 
 #### G1. Expose a replicated run to the browser
-*Fine to delegate · Needs: C6 · Small*
+*Fine to delegate · Step 29 · Needs: F1 · Small*
 
 **Build.** A function in the `wasm` crate that takes a seed and a fault level and returns the trace as JSON, alongside the existing `runScenario`. The `wasm` crate stays a thin wrapper around `host`: the nodes it runs are the ordinary ones from `node`.
 
 #### G2. The replica view
-*Fine to delegate · Needs: G1 · Medium*
+*Fine to delegate · Step 30 · Needs: G1 · Medium*
 
 **Build.** A second page beside the runway timeline. Three boxes, one per replica, showing role, election term, last log position, commit position and state fingerprint. Beside them one box for the driver, showing its outstanding request and which replica it believes is leader. Messages drawn moving between all four. Crashed replicas greyed out, blocked links shown cut. A seed box, a fault level selector, and play, pause and step controls that walk through the trace.
 
@@ -876,7 +914,7 @@ In practice this is always `Some`. `None` is only needed for a leader with no pe
 
 `Member::new(.., now)` takes a time so it can set `election_deadline = now + random(base, 2*base)` straight away. After a restart this makes the member wait a full timeout before it may stand for election, which gives a surviving leader time to reach it first (suggestion, not required by B6).
 
-## 11. Appendix: how the nodes, the hosts and the simulation fit together (A3, C2, D1 to D4)
+## 11. Appendix: how the nodes, the hosts and the simulation fit together (A3, C2, D1a to D4)
 
 Like section 10, this adds no requirements.
 
