@@ -2,7 +2,7 @@
 
 /// The sequence identifier for an object. [`Seq`] can be compared to find the order of
 /// construction.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Seq(u64);
 
 impl Seq {
@@ -12,6 +12,6 @@ impl Seq {
     /// If the counter overflows.
     #[must_use]
     pub fn next(&self) -> Self {
-        Self(self.0.checked_add(1).expect("EventQueue: Seq overflow"))
+        Self(self.0.checked_add(1).expect("Seq overflow"))
     }
 }

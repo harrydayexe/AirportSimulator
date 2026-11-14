@@ -73,7 +73,7 @@ test-web: wasm
 
 # Formatting, lints (incl. the determinism ban) and type checks
 [group("check")]
-check: wasm check-ban
+check: wasm check-ban check-layers
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo clippy -p airport-sim-wasm --target {{ wasm_target }} -- -D warnings
@@ -101,6 +101,18 @@ check-ban:
         fi
     done
     exit "$status"
+
+# Check that det, airport, raft and node never depend on host
+[group("check")]
+[script("bash")]
+check-layers:
+    set -euo pipefail
+    # Capture first so a cargo error (such as a cycle through host) fails the check.
+    tree=$(cargo tree -p det -p airport -p raft -p node -e normal,build --prefix none)
+    if grep -q '^host ' <<<"$tree"; then
+        echo "det, airport, raft or node depends on host; see AGENTS.md" >&2
+        exit 1
+    fi
 
 # Format Rust code
 [group("check")]

@@ -2,6 +2,7 @@
 use det::{ClientId, NodeId, seq::Seq};
 
 /// Everything one node can say to another. Grows as the tickets land.
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum Message<C, O> {
     /// Replica to replica message, in the same group.
     Raft(det::objects::Message<Request<C>>),
@@ -12,7 +13,7 @@ pub enum Message<C, O> {
 }
 
 /// What a client asks of an airport.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Request<C> {
     /// The ID of the client sending the request.
     pub client: ClientId,
@@ -22,27 +23,8 @@ pub struct Request<C> {
     pub command: C,
 }
 
-impl<C> PartialEq for Request<C> {
-    fn eq(&self, other: &Self) -> bool {
-        self.seq == other.seq
-    }
-}
-impl<C> Eq for Request<C> {}
-
-impl<C> PartialOrd for Request<C> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<C> Ord for Request<C> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.seq.cmp(&other.seq)
-    }
-}
-
 /// The reply to a client's [`Request`].
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum ClientReply<O> {
     /// The request has been processed.
     Done {
