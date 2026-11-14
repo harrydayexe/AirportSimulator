@@ -393,7 +393,7 @@ impl<C: Clone + Eq> Member<C> {
 
 **Tests.** Build these situations by hand by constructing each member's `Durable` directly.
 - A follower missing the last few entries catches up.
-- A follower with extra entries from an old leader that were never committed has them removed and replaced.
+- A follower with extra entries from an old leader has them removed and replaced.
 - A follower whose log is entirely different after position 3 is repaired from position 4.
 - The six follower logs in Figure 7 of the Raft paper all end up identical to the leader's.
 
