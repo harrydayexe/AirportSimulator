@@ -1,0 +1,24 @@
+{{ .Values.replicaCount }} replicas of the airport group are starting as
+{{ include "airport-simulator.fullname" . }}-0 to -{{ sub (int .Values.replicaCount) 1 }}.
+
+Watch them elect a leader:
+
+  kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ include "airport-simulator.fullname" . }}
+
+Then, from inside the cluster, send a command (a follower answers 307 with
+the leader's address, which `curl -L` follows):
+
+  curl -L -X POST http://{{ include "airport-simulator.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/commands \
+    -d '{"client":1,"seq":1,"command":{"type":"advance_time","now_ms":1000}}'
+
+GET /status shows a replica's role, term and state fingerprint; GET /snapshot
+shows its airport.
+{{- if not .Values.persistence.enabled }}
+
+WARNING: persistence is off. A replica that restarts forgets its log and its
+vote, and the group can then lose commands it has already acknowledged.
+{{- end }}
+{{- if eq (mod (int .Values.replicaCount) 2) 0 }}
+
+WARNING: replicaCount is even. {{ .Values.replicaCount }} replicas survive no more failures than {{ sub (int .Values.replicaCount) 1 }}.
+{{- end }}

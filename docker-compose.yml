@@ -1,0 +1,63 @@
+# Three replicas of the airport group on one machine, for trying the
+# production build out. In a real deployment each replica runs on its own
+# machine (see deploy/helm for Kubernetes).
+#
+#   docker compose up --build
+#   curl localhost:8081/status          # likewise 8082, 8083
+#   curl -X POST localhost:8081/commands \
+#     -d '{"client":1,"seq":1,"command":{"type":"advance_time","now_ms":1000}}'
+#
+# A follower answers 307 with the leader's number; from outside the compose
+# network, send the command to that replica's port instead (replica N is on
+# 808N).
+
+name: airport
+
+x-replica: &replica
+  image: ghcr.io/harrydayexe/airportsimulator:latest
+  build: .
+  restart: unless-stopped
+  networks: [airport]
+
+x-environment: &environment
+  # The same list on every replica, itself included.
+  AIRPORT_PEERS: 1=airport-1:7000,2=airport-2:7000,3=airport-3:7000
+  # Every replica must start from the same airport: `demo`, `single`, or
+  # the path of a JSON file mounted into the container.
+  AIRPORT_CONFIG: demo
+
+services:
+  airport-1:
+    <<: *replica
+    hostname: airport-1
+    environment:
+      <<: *environment
+      AIRPORT_ID: "1"
+    ports: ["8081:8080"]
+    volumes: [airport-1:/data]
+
+  airport-2:
+    <<: *replica
+    hostname: airport-2
+    environment:
+      <<: *environment
+      AIRPORT_ID: "2"
+    ports: ["8082:8080"]
+    volumes: [airport-2:/data]
+
+  airport-3:
+    <<: *replica
+    hostname: airport-3
+    environment:
+      <<: *environment
+      AIRPORT_ID: "3"
+    ports: ["8083:8080"]
+    volumes: [airport-3:/data]
+
+networks:
+  airport:
+
+volumes:
+  airport-1:
+  airport-2:
+  airport-3:

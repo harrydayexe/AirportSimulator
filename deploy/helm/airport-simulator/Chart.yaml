@@ -1,0 +1,13 @@
+apiVersion: v2
+name: airport-simulator
+description: A replicated airport simulator. Three replicas on three machines, kept in agreement by Raft.
+type: application
+# Both are set from the git tag when a release is published.
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/harrydayexe/AirportSimulator
+sources:
+  - https://github.com/harrydayexe/AirportSimulator
+keywords:
+  - raft
+  - simulator

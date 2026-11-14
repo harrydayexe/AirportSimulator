@@ -1,0 +1,103 @@
+# How many replicas form the group. Use an odd number: the group keeps going
+# while more than half can talk, so 3 survives one failure and 5 survives two.
+#
+# This is fixed when the chart is installed. Membership cannot change while
+# the group runs, so changing it later means a new install with new volumes.
+replicaCount: 3
+
+image:
+  repository: ghcr.io/harrydayexe/airportsimulator
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+airport:
+  # The airport every replica starts from: `demo` or `single`. Like
+  # replicaCount, this is fixed at install: replicas that start from
+  # different airports refuse to talk to each other.
+  preset: demo
+  # Or a whole airport as JSON (the `airport` object of a scenario file, see
+  # `airport-sim gen`). When set, it is used instead of the preset.
+  config: ""
+
+raft:
+  # How often the leader tells the others it is alive.
+  heartbeatMs: 100
+  # A replica that hears nothing for between one and two of these stands
+  # for election. Must be well above heartbeatMs plus the network round trip.
+  electionMs: 1000
+
+ports:
+  # Replica to replica. Never exposed outside the cluster.
+  peer: 7000
+  # Clients: POST /commands, GET /status, GET /snapshot.
+  client: 8080
+
+service:
+  # The client Service. It reaches every ready replica; one that is not the
+  # leader answers 307 with the leader's own address.
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+persistence:
+  # Each replica keeps its Raft log on its own volume. Without one, a
+  # restarted replica forgets what it promised, which Raft does not allow:
+  # only turn this off for throwaway clusters.
+  enabled: true
+  size: 1Gi
+  # Empty means the cluster's default StorageClass.
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+
+# Where replicas may be placed relative to each other:
+#   required   never two on one machine (the point of having three)
+#   preferred  spread out if possible; for small or single-node clusters
+#   none       no rule
+antiAffinity: required
+# What "machine" means above. Use topology.kubernetes.io/zone to spread
+# across zones instead.
+topologyKey: kubernetes.io/hostname
+
+podDisruptionBudget:
+  # Keeps voluntary disruptions (node drains, upgrades) to one replica at a
+  # time, so a majority is always up.
+  enabled: true
+  maxUnavailable: 1
+
+resources: {}
+#   requests:
+#     cpu: 100m
+#     memory: 128Mi
+
+# The cluster's DNS domain, used to build each replica's address.
+clusterDomain: cluster.local
+
+terminationGracePeriodSeconds: 10
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+# Extra affinity rules (nodeAffinity, podAffinity), added beside the
+# anti-affinity above. Set antiAffinity to none to write your own.
+affinity: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
