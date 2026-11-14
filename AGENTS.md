@@ -1,18 +1,36 @@
 # AGENTS.md
 
-Airport Simulator is a deterministic, replicated airport simulator. Everything runs in one
-Rust program (the "host") on a simulated network, compiled to WebAssembly and driven by a
-React web app. The full plan is in `design/design-proposal.md`.
+Airport Simulator is a deterministic, replicated airport simulator. It is built as a set of
+nodes that could each run on their own machine, and run in practice by one Rust program (the
+"host") on a simulated network, natively for seeded tests and as WebAssembly for the React
+demo. The full plan is in `design/design-proposal.md`; Phase 2 is in `design/phase-2-spec.md`.
+
+## Vocabulary
+
+- **Node**: one participant in the protocol, either a replica or a controller. It has a
+  `NodeId`, takes inputs through `step` and returns effects, and never touches a clock,
+  network, disk or another node directly.
+- **Replica**: a node holding one copy of an airport: the `Airport`, a Raft member and its log.
+- **Controller**: a node that owns the nodes below it (it knows their ids and speaks for them;
+  it never holds them in memory). A `LocalController` owns the three replicas of one airport.
+  An `AreaController` (Phase 4) owns several `LocalController`s.
+- **Raft member** (`raft::Member`): the agreement logic inside a replica. Not a node.
+- **Host**: the simulated runtime. Flat: one map of nodes, one queue, one clock.
+
+There is one implementation of every node; only the runtime differs between the demo and a
+real deployment. Never add a browser-only or simulator-only variant of anything in `raft` or
+`node`, and never make those crates (or `det`, `airport`) depend on `host`.
 
 ## Structure
 
 A Cargo workspace (`crates/`) plus a Bun/React app (`web/`). Each crate depends only on
 those listed before it: `det` holds the deterministic tools everything shares (the seeded
 `Rng`, the fingerprint, identifier types such as `NodeId`, `Term` and `Index`, and the
-values a Raft node exchanges with the host, such as `Durable`, `Input` and `Effect`); `airport`
+values a Raft member exchanges with its replica, such as `Durable`, `Input` and `Effect`); `airport`
 is the pure state machine and knows nothing of replicas,
-networks or browsers; `raft` is the hand-written agreement logic; `host` runs every replica
-with a fake network, disk and clock; `cli` (binary `airport-sim`) and `wasm` are thin
+networks or browsers; `raft` is the hand-written agreement logic (`Member`); `node` holds the
+`Node` trait and, as Phase 2 lands, the replica and the `LocalController`; `host` runs every
+node with a fake network, disk and clock; `cli` (binary `airport-sim`) and `wasm` are thin
 wrappers around `host` for bulk seeded runs and for the browser. `just wasm` compiles the
 `wasm` crate and writes JS bindings to `web/src/wasm/` (generated, not committed), which
 `web/src/sim.ts` loads.
@@ -33,7 +51,7 @@ output, so anything added to `Airport` must derive `Hash` to stay in the fingerp
 `Command`, scenario file or CLI argument can cause is rejected, never asserted: a panic in
 `Airport::apply` would stop every replica at the same log position. O(1) checks use `assert!`
 (not `debug_assert!`, so native and browser builds stop at the same step), and release builds keep
-overflow checks on. Whole-state scans (`Airport::check_invariants`, `BrowserNode::check_invariants`)
+overflow checks on. Whole-state scans (`Airport::check_invariants`, `Member::check_invariants`)
 run after every `apply`/`step` in debug builds and tests, or in release with the `paranoid` feature.
 
 ## Determinism rules

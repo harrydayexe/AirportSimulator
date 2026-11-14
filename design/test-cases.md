@@ -100,7 +100,7 @@ With fine ticks G slips into the gap ahead of F's claim. With one coarse step F'
 | H-S3 | `asking_for_one_stream_does_not_disturb_another` | `rng(Network)` before and after `rng(Faults)` and `rng(Node..)` | Equal (the method takes `&self`, so this documents intent) | Not run |
 | H-S4 | `no_two_streams_share_a_seed` | Roots 0..8 × {Network, Faults, Node id 0..5 × life 0..4} | All 176 derived seeds distinct. In particular `Node {id: 1, life: 0}` differs from `Node {id: 0, life: 1}`. | Passes (Python port of `mix`) |
 | H-S5 | `each_life_of_a_node_gets_fresh_numbers` | `Node {id: 2, life: 0}` against `life: 1` | Different | Not run |
-| H-S6 | `children_get_their_own_seeds` | `child(0)`, `child(1)`, parent: first `Network` value of each; `child(0)` twice | Three distinct values; the repeat is equal | Red until `child` is written (`todo!()`) |
+| H-S6 | ~~`children_get_their_own_seeds`~~ | Removed: `Seeds::child` went with the nested hosts in the second revision of the Phase 2 spec. | — | Retired |
 | H-M1 | `mix_is_pinned` | `mix(42, 7)`, `mix(7, 42)`, `mix(42, 8)`, `mix(0, 1)`, `mix(u64::MAX, u64::MAX)` | `0x2a08f0a6af27f33b`, `0xd4c07636ab140bf0`, `0xd1116591326a042b`, `0xe2f3b303c39f5e98`, `0x949cf74af653602a` | First value passes in Rust; the rest from the Python port that matched it |
 | H-M2 | `mix_is_not_symmetric` | The first two of H-M1 | Different | Passes |
 | H-M3 | `mix_of_zero_and_zero_is_zero` | `mix(0, 0)` | 0. Harmless (`Rng::new(0)` is valid), but worth knowing. | Passes |
@@ -121,9 +121,9 @@ The doctest on `mix` redefines `mix` as `a ^ b` inside the example, because the 
 
 ## 6. `raft`
 
-`BrowserNode` is a private struct, so these go in a `#[cfg(test)] mod tests` inside `browser_node.rs` (or make it `pub`, which spec 11.11 needs anyway). The tests for the unwritten parts are already listed in the spec, tickets B2 to B6; the cases here are for what exists, plus additions the spec does not list.
+`Member` (formerly `BrowserNode`) keeps its fields private, so these go in a `#[cfg(test)] mod tests` inside `member.rs` (or make it `pub`, which spec 11.11 needs anyway). The tests for the unwritten parts are already listed in the spec, tickets B2 to B6; the cases here are for what exists, plus additions the spec does not list.
 
-A helper worth writing first: `fn node(term: u64) -> BrowserNode<u8>` with id 1 and peers 2 and 3, and `fn msg(from, term, command)`.
+A helper worth writing first: `fn member(term: u64) -> Member<u8>` with id 1 and peers 2 and 3, and `fn msg(from, term, command)`.
 
 | ID | Test | Arrange and act | Expect | Status |
 |---|---|---|---|---|

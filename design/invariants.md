@@ -4,13 +4,15 @@ Reviewed at commit `dead33d` plus the uncommitted `host/src/{hash,seeds}.rs`, ag
 
 I built a scratch copy with Rust 1.97.0 and ran it. All 78 existing Rust tests pass. Where this document says **fires today**, I confirmed the behaviour with a throwaway probe test on that copy; nothing in your repo was touched.
 
+> **Vocabulary, since the second revision of the Phase 2 spec.** A *node* is now any participant in the protocol (a replica or a controller), and the Raft participant inside a replica is a *member* (`raft::Member`, formerly `BrowserNode`). The N-numbered invariants below are the member's; their IDs are unchanged. Where older text in this document says "node" about Raft, read "member". The host is now one flat `Host`, so the entries for `ChildHost` and `BrowserHost` in section 6 have been replaced.
+
 ## 1. Ground rules
 
 **What is an invariant and what is input.** The airport receives its commands from a replicated log. If `Airport::apply` panics on a command, all three replicas panic at the same log position and the group can never recover. So:
 
 - A state the code itself should have made impossible gets an **assertion**.
 - Anything a `Command`, a scenario JSON file or a CLI argument can cause gets a **rejection** (`Output::Rejected`, `ConfigError`, `Err(String)`), never an assertion. Section 2 lists the inputs that reach a panic today and need a rejection first.
-- Messages between Raft nodes sit in between. Every node runs your code, so a malformed message is a bug in the sender, and asserting on receipt is right for the simulator. If Rule 3 is ever used to put this on a real network, those become validation.
+- Messages between Raft members sit in between. Every member runs your code, so a malformed message is a bug in the sender, and asserting on receipt is right for the simulator. If Rule 3 is ever used to put this on a real network, those become validation.
 
 **Which macro.**
 
@@ -18,7 +20,7 @@ I built a scratch copy with Rust 1.97.0 and ran it. All 78 existing Rust tests p
 |---|---|---|
 | `const _: () = assert!(..)` | Facts about the data tables and constants | Fails the build, not the run. |
 | `assert!` | Any O(1) check | Always on, so the native build and the release WebAssembly build stop at the same step. `debug_assert!` would make a debug run and a browser run disagree. |
-| `fn check_invariants(&self)` behind `#[cfg(any(test, debug_assertions, feature = "paranoid"))]` | Whole-state scans (O(n)) | Called at the end of `Airport::apply` and `Node::step`, and from `tests/invariants.rs` after every command. The bulk seeded runs of Phase 2 turn the feature on. |
+| `fn check_invariants(&self)` behind `#[cfg(any(test, debug_assertions, feature = "paranoid"))]` | Whole-state scans (O(n)) | Called at the end of `Airport::apply` and `Member::step`, and from `tests/invariants.rs` after every command. The bulk seeded runs of Phase 2 turn the feature on. |
 | `expect("…")` / `unreachable!("…")` | Replacing a silent `else { return }` on an impossible branch | Several of these exist today and hide broken state. Listed per function below. |
 
 **Two workspace-level changes that do most of the work.**
@@ -83,7 +85,7 @@ Written for the field types the spec's section 11.11 asks for (`prev_term: Term`
 
 | ID | Type / function | Kind | Invariant |
 |---|---|---|---|
-| O1 | `Durable` (checked in `Node::new`) | PRE | Every `entry.term >= 1`, entry terms never decrease along the log, and the last entry's term `<= durable.term`. |
+| O1 | `Durable` (checked in `Member::new`) | PRE | Every `entry.term >= 1`, entry terms never decrease along the log, and the last entry's term `<= durable.term`. |
 | O2 | `Durable` | PRE | `term == 0` implies `voted_for == None` and an empty log. |
 | O3 | `Durable` | PRE | `voted_for`, if set, is this node or one of its peers. |
 | O4 | `Message` (checked on receipt) | PRE | `term >= 1`. |
@@ -93,7 +95,7 @@ Written for the field types the spec's section 11.11 asks for (`prev_term: Term`
 | O8 | `Effect::NotLeader` | POST | `hint != Some(self.id)`, and it is only emitted in answer to `Propose`. |
 | O9 | `Effect::Committed` | POST | Within one `step`, indices are consecutive and start at the old commit position plus one. |
 
-## 5. `raft` crate: `BrowserNode`
+## 5. `raft` crate: `Member`
 
 ### Struct invariants (`check_invariants`, run at the end of `new` and of every `step`)
 
@@ -127,7 +129,7 @@ Written for the field types the spec's section 11.11 asks for (`prev_term: Term`
 | ID | Function | Kind | Invariant |
 |---|---|---|---|
 | N18 | `new` | POST | `role == Follower` whatever `durable` says, `votes` empty, `leader_hint == None`, plus C1, O1 to O3, N1. |
-| N19 | `handle_message` | PRE | `from != self.id` and `from` is a peer. A message from a stranger or from itself is a host routing bug. |
+| N19 | `handle_message` | PRE | `from != self.id` and `from` is a peer. A message from a stranger or from itself is a routing bug in the replica that runs the member. |
 | N20 | `handle_message`, at the dispatch `match` | INV | `message.term == self.term`. Higher terms were adopted and lower ones answered or dropped above it. **Fires today:** a stale *reply* is not returned early (the `return` is inside the `is_request` branch), so it falls through. Probe: a candidate in term 5 with one vote receives `VoteReply` from term 3, counts it, and reaches `become_leader`. |
 | N21 | `handle_message`, higher term seen | POST | `voted_for == None`, `role == Follower`, `leader_hint == None`. **Fires today** on the hint: it is set to `Some(from)`, but the sender may be a candidate, so a later `NotLeader` points clients at a node that is not the leader. |
 | N22 | `RequestVote`, on grant | POST | `voted_for == Some(from)`, exactly one `VoteReply` is sent to `from` carrying `self.term`, and the election deadline was reset. On refusal the deadline is unchanged. |
@@ -175,22 +177,28 @@ Written for the field types the spec's section 11.11 asks for (`prev_term: Term`
 | S3 | `mix` | — | Pure, no invariant. Note that the doc comment says "SplitMix64 finaliser" but all three multiplications use `GOLDEN`; SplitMix64 uses `0xbf58476d1ce4e5b9` and `0x94d049bb133111eb`. Either is deterministic. Pin whichever you keep (test H-M1). |
 | L1 | `demo_scenario_json` | POST | Serialising a `Scenario` cannot fail, so `unwrap_or_default()` turning a failure into `""` hides an impossible state. Use `expect`. |
 
-### Not written yet (from spec section 11, for when the code lands)
+### `seeds.rs` after the second revision
+
+S2 is retired: `Seeds::child` was removed with the nested hosts. Every generator in a run now comes straight from the one root, by `Stream`.
+
+### Not written yet (spec tickets A3, C2, C3, D1 to D4, for when the code lands)
 
 | ID | Function | Kind | Invariant |
 |---|---|---|---|
-| H1 | `Host::step(now)` | PRE | `now == self.next_event_at()` and `now >= last_now`. |
-| H2 | `Host::inject(at, ..)` | PRE | `at >= last_now`, and `self.owns(event.target())`. |
-| H3 | `ChildHost::new` | PRE | `here` is non-empty, has no repeats, and is a subset of `cluster`. |
-| H4 | `ChildHost::step_node` | POST | Every `Send` becomes exactly one `Deliver` or one `Outbound`, never both, never neither. |
-| H5 | `ChildHost::reschedule_wake` | POST | `scheduled_wake[id] == node.next_wake()` after the call, and any `Wake` pushed is at `>= now`. |
-| H6 | `BrowserHost::add_child` | PRE | No node id of the child is already owned. After it, every node id is owned by exactly one host. |
-| H7 | `BrowserHost::route` | POST | An `Outbound` is injected into exactly one owner, or passed up. |
-| H8 | `BrowserHost::next_source` | POST | The chosen `(time, source)` is the minimum over all hosts, and `time >= clock.now()`. |
+| H1 | `Host::new` | PRE | No two nodes share a `NodeId`. |
+| H2 | `Host::step` | POST | The popped time is `>= clock.now()` (K1), and exactly one node is stepped per `Wake` or `Deliver`, or none if it is crashed. |
+| H3 | `Host::inject(at, ..)` | PRE | `at >= clock.now()`, and `event.target()` is a node this host was built with. |
+| H4 | `Host::step_node` | POST | Every `Send` has `to != id` and `to` a node this host was built with, and becomes zero, one or two `Deliver` events as the network decides. On the perfect network, exactly one. |
+| H5 | `Host::reschedule_wake` | POST | `scheduled_wake[id] == node.next_wake()` after the call, and any `Wake` pushed is at `>= now`. |
+| H6 | `Node::step` (any node) | PRE | `now` is not earlier than the previous call's. |
+| H7 | Replica (D1) | PRE | A `Message::Raft` comes from a replica of its own group; anything else comes from its LocalController. Otherwise it is a routing bug in the sender. |
+| H8 | Replica (D1) | INV | `next_wake()` equals its member's `next_wake()`. |
 | H9 | Replica (D1) | PRE | On `Committed { index }`: `index == last_applied + 1`. The airport is only ever changed here. |
-| H10 | Replica (D2) | PRE | `seq <= row + 1` for the client's row. A gap is a client bug: the spec says fail loudly. |
-| H11 | Client (D3) | INV | At most one command outstanding, and `seq` never decreases. |
-| H12 | Crash and restart (C3) | POST | The restarted node's `Durable` equals what the crashed node handed over, and `life` went up by exactly one. |
+| H10 | Replica (D2) | PRE | `seq <= row + 1` for the client's row. A gap is a bug in the controller: the spec says fail loudly. |
+| H11 | LocalController (D3) | INV | At most one request outstanding, `seq` never decreases, and `Outputs` go to the parent in submission order, each once. |
+| H12 | Crash and restart (C3) | POST | The restarted node's durable state equals what the crashed node handed over, and `life` went up by exactly one. |
+| H13 | LocalController (D3) | PRE | A message comes from its parent or from one of the replicas it owns. |
+| H14 | Workspace | CONST | `det`, `airport`, `raft` and `node` do not depend on `host`. Checked by `just check` (A3). |
 
 ## 7. `airport` crate
 
