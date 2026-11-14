@@ -13,6 +13,7 @@ license = "MIT"
 det = { path = "crates/det" }
 airport = { path = "crates/airport" }
 raft = { path = "crates/raft" }
+node = { path = "crates/node" }
 host = { path = "crates/host" }
 # Pinned exactly: the wasm-bindgen CLI (see justfile and CI) must match this version.
 wasm-bindgen = "=0.2.130"

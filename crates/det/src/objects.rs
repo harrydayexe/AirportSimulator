@@ -1,5 +1,5 @@
-//! The values that pass between a Raft node and the host: log entries, the
-//! state that survives a crash, and a node's inputs and effects (Phase 2
+//! The values that pass between a Raft member and the node that runs it: log
+//! entries, the state that survives a crash, and a member's inputs and effects (Phase 2
 //! spec, ticket B1). `C` is the command type stored in the log.
 
 use crate::{Index, NodeId, Term};
@@ -26,15 +26,15 @@ pub struct Entry<C> {
 /// Everything that survives a crash. Nothing else does.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Durable<C> {
-    /// The latest election term the node has seen; 0 for a brand new node.
+    /// The latest election term the member has seen; 0 for a brand new member.
     pub term: Term,
-    /// The node this one voted for in `term`, if any.
+    /// The member this one voted for in `term`, if any.
     pub voted_for: Option<NodeId>,
     /// The whole log, committed or not.
     pub log: Vec<Entry<C>>,
 }
 impl<C> Durable<C> {
-    /// What a node keeps across a crash.
+    /// What a member keeps across a crash.
     #[must_use]
     pub fn new(term: Term, voted_for: Option<NodeId>, log: Vec<Entry<C>>) -> Self {
         Self {
@@ -44,11 +44,11 @@ impl<C> Durable<C> {
         }
     }
 
-    /// Checks the shape a node's durable state always has (O1, O2). Which
-    /// node `voted_for` may name is the node's own check (O3).
+    /// Checks the shape a member's durable state always has (O1, O2). Which
+    /// member `voted_for` may name is the member's own check (O3).
     ///
     /// # Panics
-    /// If the log breaks [`assert_log_shape`], or a node that has never seen
+    /// If the log breaks [`assert_log_shape`], or a member that has never seen
     /// an election (term 0) has a vote or a log.
     pub fn assert_valid(&self) {
         assert_log_shape(&self.log, self.term);
@@ -67,7 +67,7 @@ impl<C> Durable<C> {
     }
 }
 
-/// Checks a log is one a node could have built by `term` (O1, N8): every
+/// Checks a log is one a member could have built by `term` (O1, N8): every
 /// entry is from term 1 or later, terms never fall along the log, and none is
 /// later than `term`.
 ///
@@ -93,13 +93,13 @@ pub fn assert_log_shape<C>(log: &[Entry<C>], term: Term) {
     }
 }
 
-/// Something the host hands to a node.
+/// Something a node hands to its Raft member.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum Input<C> {
     /// A time you asked to be woken at has passed. May arrive early or late,
-    /// so the node checks the time itself.
+    /// so the member checks the time itself.
     Wake,
-    /// A message from another node.
+    /// A message from another member of the group.
     Message {
         /// Where the message came from.
         from: NodeId,
@@ -110,36 +110,36 @@ pub enum Input<C> {
     Propose(C),
 }
 
-/// Something a node asks the host to do.
+/// Something a Raft member asks the node that runs it to do.
 /// TODO: Add `EffectBuilder` which can build the effect by doing `.to`, `.from` etc
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum Effect<C> {
-    /// Deliver a message to another node.
+    /// Deliver a message to another member of the group.
     Send {
-        /// The node to deliver it to.
+        /// The member to deliver it to.
         to: NodeId,
         /// What to deliver.
         message: Message<C>,
     },
     /// An entry is now committed. Emitted in order, each position once per
-    /// life of the node.
+    /// life of the member.
     Committed {
         /// The entry's position in the log.
         index: Index,
         /// The committed entry.
         entry: Entry<C>,
     },
-    /// Answer to a `Propose` this node cannot accept.
+    /// Answer to a `Propose` this member cannot accept.
     NotLeader {
-        /// The leader this node last heard from, if it knows one.
+        /// The leader this member last heard from, if it knows one.
         hint: Option<NodeId>,
     },
 }
 
-/// The part a node plays in its current election term.
+/// The part a member plays in its current election term.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Role {
-    /// Accepts entries from a leader. Every node starts here.
+    /// Accepts entries from a leader. Every member starts here.
     Follower,
     /// Asking the other nodes for votes.
     Candidate,
@@ -147,7 +147,7 @@ pub enum Role {
     Leader,
 }
 
-/// A message between nodes. A placeholder until the election and log-copying
+/// A message between Raft members. A placeholder until the election and log-copying
 /// messages are added.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Message<C> {
@@ -165,7 +165,7 @@ impl<C> Message<C> {
     }
 
     /// Checks the shape every message has, whoever sent it (O4, O5). Every
-    /// node runs this code, so a malformed message is a bug in the sender.
+    /// member runs this code, so a malformed message is a bug in the sender.
     ///
     /// # Panics
     /// If the term is 0, or an `AppendEntries` has `prev_index` and
@@ -196,7 +196,7 @@ impl<C> Message<C> {
     }
 }
 
-/// The type of message sent between two nodes.
+/// The type of message sent between two Raft members.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum MessageCommand<C> {
     /// Requesting a vote for leader.
@@ -236,7 +236,7 @@ impl<C> MessageCommand<C> {
     }
 }
 
-/// A node's role, term and positions, for checkers and the web view. A
+/// A member's role, term and positions, for checkers and the web view. A
 /// placeholder until those are filled in.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Status {

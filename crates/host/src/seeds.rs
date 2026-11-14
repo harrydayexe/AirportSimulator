@@ -12,7 +12,7 @@ pub enum Stream {
     Network,
     /// The fault schedule.
     Faults,
-    /// One life of one node.
+    /// One life of one node (a replica or a controller).
     Node {
         /// The ID of the node.
         id: NodeId,
@@ -24,11 +24,10 @@ pub enum Stream {
 const TAG_NETWORK: u64 = 1;
 const TAG_FAULTS: u64 = 2;
 const TAG_NODE: u64 = 3;
-const TAG_CHILD: u64 = 4;
 
 // S1: two streams sharing a tag would share their numbers.
 const _: () = {
-    let tags = [TAG_NETWORK, TAG_FAULTS, TAG_NODE, TAG_CHILD];
+    let tags = [TAG_NETWORK, TAG_FAULTS, TAG_NODE];
     let mut i = 0;
     while i < tags.len() {
         let mut j = i + 1;
@@ -68,21 +67,6 @@ impl Seeds {
         };
 
         Rng::new(seed)
-    }
-
-    /// The seeds for child host `index`.
-    ///
-    /// # Panics
-    /// If the child's root equals this one's (S2), which would replay this
-    /// host's streams. Only a hash collision could cause it.
-    #[must_use]
-    pub fn child(&self, index: u32) -> Seeds {
-        let root = mix(mix(self.root, TAG_CHILD), u64::from(index));
-        assert_ne!(
-            root, self.root,
-            "Seeds::child({index}) shares its parent's root"
-        );
-        Seeds::new(root)
     }
 }
 
@@ -168,17 +152,5 @@ mod tests {
     fn each_life_of_a_node_gets_fresh_numbers() {
         let seeds = Seeds::new(9);
         assert_ne!(first(seeds, node(2, 0)), first(seeds, node(2, 1)));
-    }
-
-    #[test]
-    fn children_get_their_own_seeds() {
-        let parent = Seeds::new(42);
-        let values = [
-            first(parent, Stream::Network),
-            first(parent.child(0), Stream::Network),
-            first(parent.child(1), Stream::Network),
-        ];
-        assert_eq!(values.iter().collect::<BTreeSet<_>>().len(), 3);
-        assert_eq!(first(parent.child(0), Stream::Network), values[1]);
     }
 }

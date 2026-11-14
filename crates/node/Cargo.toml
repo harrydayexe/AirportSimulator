@@ -1,0 +1,14 @@
+[package]
+name = "node"
+description = "The participants of the system: the Node trait, and (from Phase 2) the replica and the controllers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+det.workspace = true
+
+[lints]
+workspace = true

@@ -1,7 +1,8 @@
 //! Contains the definition of [`Clock`], the one true time.
 use det::Ms;
 
-/// The one simulated time. Only the top-levl host owns a `Clock`.
+/// The one simulated time, owned by the host. Nodes never see it: each
+/// `step` is told the time.
 #[derive(Debug, Default)]
 pub struct Clock {
     /// The current time.

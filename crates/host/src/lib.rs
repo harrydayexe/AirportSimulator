@@ -1,8 +1,11 @@
-//! The host (Phase 2).
+//! The host (Phase 2): the simulated runtime.
 //!
-//! Runs every replica and controller inside one deterministic event loop,
-//! playing the part of the network, disks and clock. Wrapped twice: by the
-//! `cli` crate for bulk seeded runs, and by the `wasm` crate for the browser.
+//! Runs every node (the replicas and the controllers of the `node` crate)
+//! inside one deterministic event loop, playing the part of the network,
+//! disks and clock. Wrapped twice: by the `cli` crate for bulk seeded runs,
+//! and by the `wasm` crate for the browser demo. The nodes themselves do not
+//! depend on this crate, so they could equally be run one per machine by a
+//! real runtime.
 //!
 //! Until the replicas arrive, the host runs a single airport: it turns a
 //! scenario written as JSON into the outputs of that airport, also as JSON.
@@ -11,14 +14,12 @@
 
 mod hash;
 pub use airport;
+pub use node;
 pub use raft;
-pub mod browserhost;
-pub mod childhost;
 pub mod clock;
 pub mod event;
 pub mod host;
 pub mod queue;
-pub mod report;
 pub mod seeds;
 
 use airport::scenario::{self, RunResult, Scenario};

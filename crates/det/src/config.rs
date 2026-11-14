@@ -1,8 +1,8 @@
-//! Settings for a Raft node.
+//! Settings for a Raft member.
 
 use crate::Ms;
 
-/// A Raft node's settings, such as its election timeout and heartbeat
+/// A Raft member's settings, such as its election timeout and heartbeat
 /// interval. Empty until the timing rules are written.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Config {

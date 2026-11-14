@@ -1,4 +1,8 @@
-//! An implementation of [`Node`], designed to run in one browser WASM program.
+//! One member of a Raft group: inputs in, effects out (Phase 2 spec, ticket B1).
+//!
+//! This is the only implementation. The same code runs under the simulated
+//! host (natively and as WebAssembly) and would run under a real runtime: it
+//! never touches a clock, a network or a disk itself.
 use std::collections::BTreeSet;
 
 use det::{
@@ -6,11 +10,11 @@ use det::{
     objects::{Message, MessageCommand},
 };
 
-use crate::node::Node;
-
-/// An implementation of [`Node`], designed to run in one browser WASM program.
-/// >**Warning:** this is not intended for production deployment. Demo purposes only.
-pub struct BrowserNode<C: Clone + Eq> {
+/// One member of a Raft group, storing commands of type `C`. A member is the
+/// agreement logic inside a node (a replica); it is named by that node's
+/// [`NodeId`]. Its first three fields are what [`Durable`] keeps across a
+/// crash; the rest is lost.
+pub struct Member<C: Clone + Eq> {
     // Durable
     term: Term,
     voted_for: Option<NodeId>,
@@ -32,7 +36,7 @@ pub struct BrowserNode<C: Clone + Eq> {
     votes: BTreeSet<NodeId>,
 }
 
-/// The parts of a node one `step` is compared against (N13 to N15).
+/// The parts of a member one `step` is compared against (N13 to N15).
 #[cfg(any(test, debug_assertions, feature = "paranoid"))]
 struct Before {
     term: Term,
@@ -42,8 +46,8 @@ struct Before {
     last_term: Option<Term>,
 }
 
-impl<C: Clone + Eq> BrowserNode<C> {
-    /// Returns the number of nodes in the cluster.
+impl<C: Clone + Eq> Member<C> {
+    /// Returns the number of members in the cluster.
     fn cluster_size(&self) -> usize {
         self.peers.len() + 1
     }
@@ -63,7 +67,7 @@ impl<C: Clone + Eq> BrowserNode<C> {
         assert_eq!(
             self.role,
             Role::Leader,
-            "node {}: heartbeat deadline set while not leader",
+            "member {}: heartbeat deadline set while not leader",
             self.id
         );
         self.heartbeat_deadline = Some(now + self.config.heartbeat_interval);
@@ -76,12 +80,12 @@ impl<C: Clone + Eq> BrowserNode<C> {
         self.election_deadline = Some(now + Ms(base + self.rng.below(base + 1)));
     }
 
-    /// A message to `to` carrying this node's term (O7).
+    /// A message to `to` carrying this member's term (O7).
     fn send(&self, to: NodeId, command: MessageCommand<C>) -> Effect<C> {
-        assert_ne!(to, self.id, "node {}: sending to itself", self.id);
+        assert_ne!(to, self.id, "member {}: sending to itself", self.id);
         assert!(
             self.is_peer(to),
-            "node {}: sending to stranger {to}",
+            "member {}: sending to stranger {to}",
             self.id
         );
         Effect::Send {
@@ -93,7 +97,11 @@ impl<C: Clone + Eq> BrowserNode<C> {
     /// Adopts a higher term seen in a message: no vote yet in it, and no
     /// known leader, since the sender may only be a candidate (N21).
     fn adopt_term(&mut self, term: Term, now: Ms) {
-        assert!(term > self.term, "node {}: adopting a lower term", self.id);
+        assert!(
+            term > self.term,
+            "member {}: adopting a lower term",
+            self.id
+        );
         let was_leader = self.role == Role::Leader;
         self.term = term;
         self.voted_for = None;
@@ -107,26 +115,26 @@ impl<C: Clone + Eq> BrowserNode<C> {
     }
 
     fn send_append_to_all(&self) {
-        assert_eq!(self.role, Role::Leader, "node {}: N33", self.id);
+        assert_eq!(self.role, Role::Leader, "member {}: N33", self.id);
         unimplemented!("please implement send_append_to_all");
     }
 
     // TODO(N28) POST: term == old + 1, role == Candidate, voted_for == Some(id),
     // votes == {id}, and now + base <= election_deadline <= now + 2 * base.
     fn start_election(&self, _time: Ms) {
-        assert_ne!(self.role, Role::Leader, "node {}: N28", self.id);
+        assert_ne!(self.role, Role::Leader, "member {}: N28", self.id);
         unimplemented!("please implement start_election");
     }
 
     // TODO(N31) POST: log.len() == old + 1 and the new entry's term is self.term.
     fn append_entry(&mut self, _term: Term, _command: C) {
-        assert_eq!(self.role, Role::Leader, "node {}: N31", self.id);
+        assert_eq!(self.role, Role::Leader, "member {}: N31", self.id);
         unimplemented!("Please implement append_entry");
     }
 
     // TODO(N34): also assert the message being refused was a request.
     fn send_refusal(&mut self, _to: NodeId, term: Term) {
-        assert_eq!(term, self.term, "node {}: N34", self.id);
+        assert_eq!(term, self.term, "member {}: N34", self.id);
         unimplemented!("Please implement send_refusal");
     }
 
@@ -134,10 +142,10 @@ impl<C: Clone + Eq> BrowserNode<C> {
     // election_deadline == None, every matched[p] == 0 and every next[p] is
     // the position of that Noop.
     fn become_leader(&mut self) {
-        assert_eq!(self.role, Role::Candidate, "node {}: N29", self.id);
+        assert_eq!(self.role, Role::Candidate, "member {}: N29", self.id);
         assert!(
             self.votes.len() >= self.majority(),
-            "node {}: becoming leader without a majority",
+            "member {}: becoming leader without a majority",
             self.id
         );
         unimplemented!("Please implement become_leader");
@@ -148,11 +156,12 @@ impl<C: Clone + Eq> BrowserNode<C> {
         reason = "AppendEntries will move its entries into the log once written"
     )]
     fn handle_message(&mut self, now: Ms, from: NodeId, message: Message<C>) -> Vec<Effect<C>> {
-        // N19: a message from a stranger or from itself is a host routing bug.
-        assert_ne!(from, self.id, "node {}: message from itself", self.id);
+        // N19: a message from a stranger or from itself is a routing bug in the
+        // node that runs this member.
+        assert_ne!(from, self.id, "member {}: message from itself", self.id);
         assert!(
             self.is_peer(from),
-            "node {}: message from stranger {from}",
+            "member {}: message from stranger {from}",
             self.id
         );
         message.assert_valid();
@@ -208,15 +217,19 @@ impl<C: Clone + Eq> BrowserNode<C> {
         effects
     }
 
-    /// Checks everything that holds whenever the node is at rest (spec
+    /// Checks everything that holds whenever the member is at rest (spec
     /// section 10; N1 to N11 in `design/invariants.md`).
     #[cfg(any(test, debug_assertions, feature = "paranoid"))]
     fn check_invariants(&self) {
         let id = self.id;
         // N1: `cluster_size` and `majority` rely on this.
-        assert!(!self.is_peer(id), "node {id}: listed among its own peers");
+        assert!(!self.is_peer(id), "member {id}: listed among its own peers");
         let distinct: BTreeSet<_> = self.peers.iter().collect();
-        assert_eq!(distinct.len(), self.peers.len(), "node {id}: repeated peer");
+        assert_eq!(
+            distinct.len(),
+            self.peers.len(),
+            "member {id}: repeated peer"
+        );
         // N2
         let (majority, size) = (self.majority(), self.cluster_size());
         assert!(2 * majority > size && 2 * (majority - 1) <= size);
@@ -225,7 +238,7 @@ impl<C: Clone + Eq> BrowserNode<C> {
             Role::Leader => {
                 assert!(
                     self.heartbeat_deadline.is_some() || self.peers.is_empty(),
-                    "node {id}: leader without a heartbeat deadline"
+                    "member {id}: leader without a heartbeat deadline"
                 );
                 assert!(self.election_deadline.is_none());
                 assert_eq!(self.next_wake(), self.heartbeat_deadline);
@@ -233,7 +246,7 @@ impl<C: Clone + Eq> BrowserNode<C> {
             Role::Follower | Role::Candidate => {
                 assert!(
                     self.election_deadline.is_some(),
-                    "node {id}: {:?} without an election deadline",
+                    "member {id}: {:?} without an election deadline",
                     self.role
                 );
                 assert!(self.heartbeat_deadline.is_none());
@@ -243,30 +256,34 @@ impl<C: Clone + Eq> BrowserNode<C> {
         // N5, N6, N7
         match self.role {
             Role::Candidate => {
-                assert_eq!(self.voted_for, Some(id), "node {id}: candidate N5");
-                assert!(self.votes.contains(&id), "node {id}: candidate N5");
+                assert_eq!(self.voted_for, Some(id), "member {id}: candidate N5");
+                assert!(self.votes.contains(&id), "member {id}: candidate N5");
                 assert!(
                     self.votes.iter().all(|v| *v == id || self.is_peer(*v)),
-                    "node {id}: vote from a stranger in {:?}",
+                    "member {id}: vote from a stranger in {:?}",
                     self.votes
                 );
             }
             Role::Leader => {
-                assert_eq!(self.voted_for, Some(id), "node {id}: leader N6");
+                assert_eq!(self.voted_for, Some(id), "member {id}: leader N6");
             }
             Role::Follower => {}
         }
         if self.role != Role::Candidate {
             assert!(
                 self.votes.is_empty(),
-                "node {id}: votes kept after election"
+                "member {id}: votes kept after election"
             );
         }
         // N8
         det::objects::assert_log_shape(&self.log, self.term);
         // N11
         if self.role != Role::Leader {
-            assert_ne!(self.leader_hint, Some(id), "node {id}: names itself leader");
+            assert_ne!(
+                self.leader_hint,
+                Some(id),
+                "member {id}: names itself leader"
+            );
         }
         // TODO(N9, N10) once `commit`, `next` and `matched` exist.
     }
@@ -287,12 +304,12 @@ impl<C: Clone + Eq> BrowserNode<C> {
     fn check_step(&self, before: &Before) {
         let id = self.id;
         // N13
-        assert!(self.term >= before.term, "node {id}: term went down");
+        assert!(self.term >= before.term, "member {id}: term went down");
         // N14
         if self.term == before.term && before.voted_for.is_some() {
             assert_eq!(
                 self.voted_for, before.voted_for,
-                "node {id}: second vote in term {}",
+                "member {id}: second vote in term {}",
                 self.term
             );
         }
@@ -300,13 +317,13 @@ impl<C: Clone + Eq> BrowserNode<C> {
         if before.role == Role::Leader && self.role == Role::Leader && self.term == before.term {
             assert!(
                 self.log.len() >= before.log_len,
-                "node {id}: leader log shrank"
+                "member {id}: leader log shrank"
             );
             if let Some(last_term) = before.last_term {
                 assert_eq!(
                     self.log[before.log_len - 1].term,
                     last_term,
-                    "node {id}: leader rewrote its log"
+                    "member {id}: leader rewrote its log"
                 );
             }
         }
@@ -314,10 +331,15 @@ impl<C: Clone + Eq> BrowserNode<C> {
     }
 }
 
-impl<C: Clone + Eq> Node<C> for BrowserNode<C> {
+impl<C: Clone + Eq> Member<C> {
     /// A follower in the term `durable` records, with its vote and log. `peers`
-    /// are the other nodes; `rng` drives its random election timeouts.
-    fn new(
+    /// are the other members; `rng` drives its random election timeouts.
+    ///
+    /// # Panics
+    /// If `config` or `durable` is not valid, or `durable` records a vote for
+    /// a node outside the group. All three are bugs in the caller.
+    #[must_use]
+    pub fn new(
         id: NodeId,
         peers: Vec<NodeId>,
         config: Config,
@@ -332,10 +354,10 @@ impl<C: Clone + Eq> Node<C> for BrowserNode<C> {
         if let Some(v) = durable.voted_for {
             assert!(
                 v == id || peers.contains(&v),
-                "node {id}: durable vote for stranger {v}"
+                "member {id}: durable vote for stranger {v}"
             );
         }
-        let mut node = Self {
+        let mut member = Self {
             term: durable.term,
             voted_for: durable.voted_for,
             log: durable.log,
@@ -352,19 +374,24 @@ impl<C: Clone + Eq> Node<C> for BrowserNode<C> {
             votes: BTreeSet::new(),
         };
         // Spec 10.7: wait a full timeout before standing for election.
-        node.reset_election_deadline(now);
+        member.reset_election_deadline(now);
         #[cfg(any(test, debug_assertions, feature = "paranoid"))]
-        node.check_invariants();
-        node
+        member.check_invariants();
+        member
     }
 
-    /// Handle one input at simulated time `now` and return what the host
-    /// should do as a result.
-    fn step(&mut self, now: Ms, input: Input<C>) -> Vec<Effect<C>> {
-        // N12: time never goes backwards for a node.
+    /// Handle one input at simulated time `now` and return what the node
+    /// that runs this member should do as a result.
+    ///
+    /// # Panics
+    /// If `now` is earlier than the last call, a message comes from outside
+    /// the group, or the step breaks one of the invariants in
+    /// `design/invariants.md`. Each is a bug, not bad input.
+    pub fn step(&mut self, now: Ms, input: Input<C>) -> Vec<Effect<C>> {
+        // N12: time never goes backwards for a member.
         assert!(
             now >= self.now,
-            "node {}: time went back from {} to {now}",
+            "member {}: time went back from {} to {now}",
             self.id,
             self.now
         );
@@ -413,9 +440,10 @@ impl<C: Clone + Eq> Node<C> for BrowserNode<C> {
         effects
     }
 
-    /// When the host should send the next `Wake`: a pure read of the
+    /// When the member next needs an `Input::Wake`: a pure read of the
     /// deadline for the current role (spec 10.6).
-    fn next_wake(&self) -> Option<Ms> {
+    #[must_use]
+    pub fn next_wake(&self) -> Option<Ms> {
         match self.role {
             Role::Leader => self.heartbeat_deadline,
             Role::Follower | Role::Candidate => self.election_deadline,
@@ -423,17 +451,20 @@ impl<C: Clone + Eq> Node<C> for BrowserNode<C> {
     }
 
     /// What is left after a crash.
-    fn into_durable(self) -> Durable<C> {
+    #[must_use]
+    pub fn into_durable(self) -> Durable<C> {
         Durable::new(self.term, self.voted_for, self.log)
     }
 
     /// Role, term and positions, for checkers and the web view.
-    fn status(&self) -> Status {
+    #[must_use]
+    pub fn status(&self) -> Status {
         self.status
     }
 
     /// The whole log, read-only, for checkers.
-    fn log(&self) -> &[Entry<C>] {
+    #[must_use]
+    pub fn log(&self) -> &[Entry<C>] {
         &self.log
     }
 }
@@ -442,8 +473,8 @@ impl<C: Clone + Eq> Node<C> for BrowserNode<C> {
 mod tests {
     use super::*;
 
-    fn node(term: u64, voted_for: Option<u32>) -> BrowserNode<u32> {
-        BrowserNode::new(
+    fn member(term: u64, voted_for: Option<u32>) -> Member<u32> {
+        Member::new(
             NodeId(1),
             vec![NodeId(2), NodeId(3)],
             Config::default(),
@@ -461,23 +492,23 @@ mod tests {
     }
 
     #[test]
-    fn a_new_node_has_an_election_deadline_to_wake_for() {
-        let n = node(0, None);
-        let wake = n.next_wake().expect("N3/N4: a new node must wake");
+    fn a_new_member_has_an_election_deadline_to_wake_for() {
+        let n = member(0, None);
+        let wake = n.next_wake().expect("N3/N4: a new member must wake");
         assert!(wake >= Ms(1_150) && wake <= Ms(1_300), "{wake:?}");
         assert_eq!(n.next_wake(), n.next_wake());
     }
 
     #[test]
     fn wake_before_the_deadline_does_nothing() {
-        let mut n = node(0, None);
+        let mut n = member(0, None);
         assert!(n.step(Ms(1_001), Input::Wake).is_empty());
         assert_eq!(n.role, Role::Follower);
     }
 
     #[test]
     fn a_stale_reply_is_dropped() {
-        let mut n = node(5, Some(1));
+        let mut n = member(5, Some(1));
         n.role = Role::Candidate;
         n.votes.insert(NodeId(1));
         assert!(
@@ -493,7 +524,7 @@ mod tests {
 
     #[test]
     fn a_higher_term_names_no_leader() {
-        let mut n = node(1, None);
+        let mut n = member(1, None);
         let effects = n.step(Ms(1_001), message(2, 4, MessageCommand::RequestVote));
         assert_eq!(n.term, Term(4));
         assert_eq!(n.leader_hint, None, "N21: the sender is only a candidate");
@@ -509,7 +540,7 @@ mod tests {
 
     #[test]
     fn one_vote_per_term() {
-        let mut n = node(4, Some(2));
+        let mut n = member(4, Some(2));
         assert!(
             n.step(Ms(1_001), message(3, 4, MessageCommand::RequestVote))
                 .is_empty()
@@ -520,20 +551,20 @@ mod tests {
     #[test]
     #[should_panic(expected = "stranger")]
     fn a_message_from_a_stranger_is_a_routing_bug() {
-        let mut n = node(1, None);
+        let mut n = member(1, None);
         let _ = n.step(Ms(1_001), message(99, 1, MessageCommand::VoteReply));
     }
 
     #[test]
     #[should_panic(expected = "time went back")]
     fn time_never_goes_backwards() {
-        let mut n = node(0, None);
+        let mut n = member(0, None);
         let _ = n.step(Ms(999), Input::Wake);
     }
 
     #[test]
     #[should_panic(expected = "stranger")]
     fn a_durable_vote_names_a_cluster_member() {
-        let _ = node(2, Some(9));
+        let _ = member(2, Some(9));
     }
 }
